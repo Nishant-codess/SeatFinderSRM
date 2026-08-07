@@ -1,161 +1,87 @@
-<div align="center">
+<p align="center">
+  <img src="public/images/logo.png" alt="SeatFinderSRM" width="64" height="64" style="border-radius:50%">
+</p>
 
-# 🪑 SeatFinderSRM
+<h1 align="center">SeatFinderSRM</h1>
 
-### *Find Your Perfect Study Spot*
+<p align="center">
+  <strong>Real-time library seat booking for SRM University students — find, book, and check in with a QR scan.</strong>
+</p>
 
-A modern, real-time seat booking system for SRM University libraries, built with Next.js and Firebase.
+<p align="center">
+  <img src="https://img.shields.io/badge/Next.js-black?style=flat-square&logo=next.js" alt="Next.js">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Firebase-DD2C00?style=flat-square&logo=firebase&logoColor=white" alt="Firebase">
+  <img src="https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white" alt="Tailwind CSS">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-orange?style=flat-square" alt="License">
+</p>
 
-[![Next.js](https://img.shields.io/badge/Next.js-16.0.7-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
-[![Firebase](https://img.shields.io/badge/Firebase-12.6-orange?style=for-the-badge&logo=firebase)](https://firebase.google.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?style=for-the-badge&logo=typescript)](https://www.typescriptlang.org/)
-[![License](https://img.shields.io/badge/License-GPL%20v3-green?style=for-the-badge)](LICENSE)
+---
 
+## What is SeatFinderSRM?
 
-</div>
+SRM University's library has hundreds of seats across four floors and no way for students to know if a seat is free before walking in. SeatFinderSRM solves this with a real-time interactive floor map that shows live seat availability, lets students book a seat for a specific duration, and confirms their presence via a QR code scan at the entrance. The system is exclusive to `@srmist.edu.in` accounts and self-heals — expired bookings are automatically released so seats never get ghost-locked.
 
+> **Live demo →** [seatfinder-srm.firebaseapp.com](https://seatfinder-srm.firebaseapp.com)
 
-## ✨ Features
+---
 
-### 🔐 **Secure Authentication**
-- **SRM-Exclusive Access**: Only `@srmist.edu.in` email addresses allowed
-- **Automatic User Sync**: User profiles automatically created in database on first login
-- **Secure Firebase Auth**: Industry-standard authentication
-- **Admin Access Control**: Configurable admin emails via environment variables
+## What you get
 
-### 🗺️ **Interactive Seat Map**
-- **Real-time Updates**: See seat availability instantly across all floors
-- **Visual Status Indicators**: 
-  - 🟢 Available - Ready to book
-  - 🟡 Reserved - Booked but not checked in
-  - 🔴 Occupied - Currently in use
-  - 🔧 Maintenance - Under repair
-  - ⛔ Out of Service - Temporarily unavailable
-- **Floor Navigation**: Easy switching between library floors
-- **Search & Filter**: Find seats quickly with advanced filters
+- **Interactive floor map** — real-time seat status across 4 floors (200 seats) with colour-coded availability; updates in under a second across all connected clients.
+- **QR code check-in** — every booking generates a scannable QR code; admins use the scanner page to check students in and out without any manual lookup.
+- **Anti-hoarding system** — unconfirmed reservations are automatically cancelled after a grace period; overstays release the seat without any admin intervention.
+- **Booking extension** — students can extend an active booking if the seat remains free, with conflict detection against other reservations.
+- **Full admin dashboard** — analytics (occupancy rate, peak hours, no-show rate), booking management, user flagging, seat maintenance controls, and CSV report exports.
 
-### ⏱️ **Smart Booking System**
-- **Timed Reservations**: Book seats for specific durations
-- **Booking Extension**: Extend your booking if needed
-- **Anti-Hoarding Protection**: Automatic cancellation of unconfirmed bookings
-- **Booking History**: Track all your past and current bookings
-- **Usage Statistics**: View your booking patterns and total hours
+---
 
-### 📱 **QR Code Check-in**
-- **Unique QR Codes**: Each booking generates a scannable QR code
-- **Quick Check-in**: Scan at library entrance to confirm your seat
-- **Download QR**: Save QR code for offline access
-- **Admin Scanner**: Staff interface for seamless check-in/check-out management
+## Stack
 
-### 💬 **Feedback System**
-- **Submit Feedback**: Report issues or suggest improvements
-- **Category-based**: Technical, Booking, Seat, Facility, or General feedback
-- **Ticket Tracking**: View status of your feedback submissions
-- **Admin Responses**: Get replies from library staff
+| Layer | Tech |
+|---|---|
+| Framework | Next.js 16 (App Router, TypeScript) |
+| Auth | Firebase Authentication (email/password, @srmist.edu.in domain restriction) |
+| Database | Firebase Realtime Database |
+| Styling | Tailwind CSS · shadcn/ui (Radix UI) |
+| Charts | Recharts |
+| QR | react-qr-code · html5-qrcode · jsqr |
+| AI | Google Genkit · Gemini 2.0 Flash |
+| Validation | Zod · React Hook Form |
+| Testing | Jest · Testing Library · fast-check |
+| Hosting | Firebase App Hosting |
 
-### 📊 **Admin Dashboard**
-- **Analytics**: Real-time occupancy rates, peak hours, and usage trends
-- **Booking Management**: View, cancel, check-in/out bookings manually
-- **User Management**: Search users, flag/unflag accounts
-- **Seat Management**: Mark seats for maintenance or out of service
-- **Feedback Management**: View and respond to user feedback
-- **Reports**: Generate CSV reports with custom date ranges
-- **Settings**: Configure library operating hours
+---
 
-### 🔄 **Self-Healing System**
-- **Auto-Cleanup**: Expired bookings automatically freed
-- **Overstay Detection**: Seats released after booking duration ends
-- **Real-time Sync**: All changes reflected instantly across all devices
-- **Automatic Expiry**: Unconfirmed bookings cancelled after grace period
+## Engineering Decisions
 
-### 🎨 **Modern UI/UX**
-- **Responsive Design**: Perfect on desktop, tablet, and mobile
-- **Dark/Light Mode**: Easy on the eyes, day or night
-- **Smooth Animations**: Fluid transitions and interactions
-- **Accessible**: Built with accessibility in mind
-- **Mobile-First**: Optimized for mobile devices
+**Why Firebase Realtime Database over Postgres/Supabase?**
+Seat availability needs to propagate to every connected browser in under a second — Firebase's WebSocket-native sync achieves this without any polling or server-side WebSocket infrastructure.
 
+**Why restrict sign-up to @srmist.edu.in emails?**
+The system is campus-only by design. Firebase Auth's email enumeration combined with a domain check at the client layer means zero-friction sign-up for students while completely blocking outsiders — no invite codes or manual approval needed.
 
-## 🎯 How It Works
+**Why configure admins via an environment variable instead of a database role?**
+The admin set is small and known ahead of time. An env-var check is zero-latency, cannot be manipulated through the database, and never causes a round-trip on every page load.
 
-```mermaid
-graph LR
-    A[Student Login] --> B[Browse Seats]
-    B --> C[Book Available Seat]
-    C --> D[Receive QR Code]
-    D --> E[Scan at Library]
-    E --> F[Seat Confirmed]
-    F --> G[Study Time!]
-    G --> H[Auto Check-out]
-```
+**What would you do differently in v2?**
+Move admin detection server-side with Firebase Security Rules and custom claims, rather than relying on a `NEXT_PUBLIC_` env var that leaks the list to the client bundle. Also add push notifications (FCM) to replace the TODO comment in the booking cancellation flow.
 
-### 📝 User Flow
+---
 
-1. **Sign Up/Login** with your `@srmist.edu.in` email
-2. **Verify Email** via the link sent to your inbox
-3. **Browse Seats** on the interactive floor map
-4. **Book a Seat** for your desired duration
-5. **Get QR Code** instantly after booking
-6. **Check In** by scanning QR at library entrance
-7. **Study** in your reserved seat
-8. **Auto Check-out** when time expires or manually check out
+## Docs
 
+| Document | Description |
+|---|---|
+| [PRD](docs/PRD.md) | Product requirements — goals, user stories, non-goals |
+| [Architecture](docs/ARCHITECTURE.md) | System design, data flow, component breakdown |
+| [Decisions](docs/DECISIONS.md) | Every major technical decision and why |
+| [Setup](docs/SETUP.md) | Local dev setup, env vars, deployment |
 
-## 📊 System Capacity
+---
 
-- **Concurrent Users**: Supports 1,000+ simultaneous users
-- **Daily Bookings**: Handles 2,000-5,000 bookings per day
-- **Real-time Updates**: Sub-second latency for seat status changes
-- **Uptime**: 99.9% availability with Firebase infrastructure
-- **Scalability**: Auto-scales with Firebase Realtime Database
+## Author
 
-## 🤝 Contributing
+**Tanish Poddar** — [tanisheesh.in](https://tanisheesh.in) · [LinkedIn](https://linkedin.com/in/tanisheesh) · [GitHub](https://github.com/tanisheesh)
 
-We welcome contributions! Here's how you can help:
-
-1. 🍴 Fork the repository
-2. 🌿 Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. 💾 Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. 📤 Push to the branch (`git push origin feature/AmazingFeature`)
-5. 🔃 Open a Pull Request
-
-
-## 👥 Contributors
-
-<table>
-<tr>
-<td align="center">
-<a href="https://github.com/nidhi-nayana">
-<img src="https://github.com/nidhi-nayana.png" width="100px;" alt="Nidhi Nayana"/><br />
-<sub><b>Nidhi Nayana</b></sub>
-</a>
-</td>
-<td align="center">
-<a href="https://github.com/tanisheesh">
-<img src="https://github.com/tanisheesh.png" width="100px;" alt="Tanish Poddar"/><br />
-<sub><b>Tanish Poddar</b></sub>
-</a>
-</td>
-<td align="center">
-<a href="https://github.com/nishant-codess">
-<img src="https://github.com/nishant-codess.png" width="100px;" alt="Nishant Ranjan"/><br />
-<sub><b>Nishant Ranjan</b></sub>
-</a>
-</td>
-</tr>
-</table>
-
-
-## 📄 License
-
-This project is licensed under the **GNU General Public License v3.0** - see the [LICENSE](LICENSE) file for details.
-
-<div align="center">
-
-### ⭐ Star us on GitHub — it motivates us a lot!
-
-Made with ❤️ by SRM Students, for SRM Students
-
-[⬆ Back to Top](#-seatfindersrm)
-
-</div>
+AWS Student Builder Lead · SRM IST · Ex-NIC Govt of India
