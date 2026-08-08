@@ -1,6 +1,6 @@
 # Local Setup — SeatFinderSRM
 
-> **Just want to try it?** Use the live demo at [seatfinder-srm.firebaseapp.com](https://seatfinder-srm.firebaseapp.com) — no setup needed.
+> **Just want to try it?** Use the live demo at [seatfinder.tanisheesh.in](https://seatfinder.tanisheesh.in) — no setup needed.
 > This guide is for running SeatFinderSRM locally or self-hosting it.
 
 ---

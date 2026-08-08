@@ -9,6 +9,9 @@
 </p>
 
 <p align="center">
+  <a href="https://seatfinder.tanisheesh.in">
+    <img src="https://img.shields.io/badge/live_demo-F97316-F97316?style=flat-square" alt="Live Demo">
+  </a>
   <img src="https://img.shields.io/badge/Next.js-black?style=flat-square&logo=next.js" alt="Next.js">
   <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Firebase-DD2C00?style=flat-square&logo=firebase&logoColor=white" alt="Firebase">
@@ -22,7 +25,7 @@
 
 SRM University's library has hundreds of seats across four floors and no way for students to know if a seat is free before walking in. SeatFinderSRM solves this with a real-time interactive floor map that shows live seat availability, lets students book a seat for a specific duration, and confirms their presence via a QR code scan at the entrance. The system is exclusive to `@srmist.edu.in` accounts and self-heals — expired bookings are automatically released so seats never get ghost-locked.
 
-> **Live demo →** [seatfinder-srm.firebaseapp.com](https://seatfinder-srm.firebaseapp.com)
+> **Live demo →** [seatfinder.tanisheesh.in](https://seatfinder.tanisheesh.in)
 
 ---
 
