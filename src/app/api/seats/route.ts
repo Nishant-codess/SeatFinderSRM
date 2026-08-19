@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { docClient, TABLES } from "@/lib/aws";
 import { ScanCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 
@@ -36,7 +36,7 @@ async function seedSeats() {
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const { Items = [] } = await docClient.send(new ScanCommand({ TableName: TABLES.SEATS }));
 

@@ -49,7 +49,7 @@ export async function initializeUserRole(
 
       await cognitoAdmin.send(
         new AdminUpdateUserAttributesCommand({
-          UserPoolId: process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID!,
+          UserPoolId: process.env.COGNITO_USER_POOL_ID!,
           Username: email,
           UserAttributes: [{ Name: "custom:role", Value: role }],
         })

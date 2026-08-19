@@ -9,7 +9,7 @@ import {
 import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import nodemailer from "nodemailer";
 
-const POOL_ID = process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID!;
+const POOL_ID = process.env.COGNITO_USER_POOL_ID!;
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
