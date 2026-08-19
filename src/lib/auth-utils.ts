@@ -1,3 +1,5 @@
+// FOR TESTS ONLY — this is a mock session store with no connection to real auth.
+// Do NOT import from API routes. Use src/lib/verify-admin.ts for production auth.
 import { UserProfile, UserRole } from '@/types';
 
 // Mock authentication database

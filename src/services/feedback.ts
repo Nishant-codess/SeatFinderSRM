@@ -1,235 +1,112 @@
-import { ref, get, set, update, push } from 'firebase/database';
-import { db } from '@/lib/firebase';
-import type { FeedbackTicket, FeedbackFilters, FeedbackResponse } from '@/types';
+import { GetCommand, PutCommand, UpdateCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { docClient, TABLES } from "@/lib/aws";
+import type { FeedbackTicket, FeedbackFilters, FeedbackResponse } from "@/types";
 
-/**
- * Feedback Service
- * Provides functions for managing feedback tickets and responses
- */
-
-/**
- * Submit new feedback ticket
- */
 export async function submitFeedback(
-  ticket: Omit<
-    FeedbackTicket,
-    'id' | 'status' | 'responses' | 'createdAt' | 'updatedAt'
-  >
+  ticket: Omit<FeedbackTicket, "id" | "status" | "responses" | "createdAt" | "updatedAt">
 ): Promise<string> {
-  try {
-    const feedbackRef = ref(db, 'feedback');
-    const newTicketRef = push(feedbackRef);
-    const ticketId = newTicketRef.key!;
+  const feedbackId = `feedback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const now = new Date().toISOString();
 
-    const newTicket: FeedbackTicket = {
-      ...ticket,
-      id: ticketId,
-      status: 'pending',
-      responses: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  const newTicket: FeedbackTicket = {
+    ...ticket,
+    id: feedbackId,
+    status: "pending",
+    responses: [],
+    createdAt: now,
+    updatedAt: now,
+  };
 
-    await set(newTicketRef, newTicket);
-
-    // Notify admins of new feedback
-    // TODO: Send notification to admins about new feedback
-
-    return ticketId;
-  } catch (error) {
-    console.error('Error submitting feedback:', error);
-    throw error;
-  }
+  await docClient.send(new PutCommand({ TableName: TABLES.FEEDBACK, Item: { ...newTicket, feedbackId } }));
+  return feedbackId;
 }
 
-/**
- * Get user's feedback history
- */
 export async function getUserFeedback(userId: string): Promise<FeedbackTicket[]> {
   try {
-    const feedbackRef = ref(db, 'feedback');
-    const snapshot = await get(feedbackRef);
-
-    if (!snapshot.exists()) {
-      return [];
-    }
-
-    const tickets: FeedbackTicket[] = [];
-    snapshot.forEach((child) => {
-      const ticket = child.val() as FeedbackTicket;
-      if (ticket.userId === userId) {
-        tickets.push(ticket);
-      }
-    });
-
-    // Sort by creation date (most recent first)
-    tickets.sort((a, b) => {
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
-
-    return tickets;
-  } catch (error) {
-    console.error('Error fetching user feedback:', error);
+    const { Items = [] } = await docClient.send(
+      new ScanCommand({
+        TableName: TABLES.FEEDBACK,
+        FilterExpression: "userId = :uid",
+        ExpressionAttributeValues: { ":uid": userId },
+      })
+    );
+    return (Items as FeedbackTicket[]).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  } catch {
     return [];
   }
 }
 
-/**
- * Get all feedback (admin)
- */
-export async function getAllFeedback(
-  filters?: FeedbackFilters
-): Promise<FeedbackTicket[]> {
+export async function getAllFeedback(filters?: FeedbackFilters): Promise<FeedbackTicket[]> {
   try {
-    const feedbackRef = ref(db, 'feedback');
-    const snapshot = await get(feedbackRef);
-
-    if (!snapshot.exists()) {
-      return [];
-    }
-
-    let tickets: FeedbackTicket[] = [];
-    snapshot.forEach((child) => {
-      tickets.push(child.val() as FeedbackTicket);
-    });
-
-    // Apply filters
-    if (filters) {
-      if (filters.status) {
-        tickets = tickets.filter((t) => t.status === filters.status);
-      }
-      if (filters.category) {
-        tickets = tickets.filter((t) => t.category === filters.category);
-      }
-    }
-
-    // Sort by creation date (most recent first)
-    tickets.sort((a, b) => {
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
-
-    return tickets;
-  } catch (error) {
-    console.error('Error fetching all feedback:', error);
+    const { Items = [] } = await docClient.send(new ScanCommand({ TableName: TABLES.FEEDBACK }));
+    let tickets = Items as FeedbackTicket[];
+    if (filters?.status) tickets = tickets.filter((t) => t.status === filters.status);
+    if (filters?.category) tickets = tickets.filter((t) => t.category === filters.category);
+    return tickets.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  } catch {
     return [];
   }
 }
 
-/**
- * Add response to ticket
- */
 export async function addResponse(
   ticketId: string,
   authorId: string,
   authorName: string,
   message: string
 ): Promise<void> {
-  try {
-    const ticketRef = ref(db, `feedback/${ticketId}`);
-    const snapshot = await get(ticketRef);
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: TABLES.FEEDBACK, Key: { feedbackId: ticketId } })
+  );
+  if (!Item) throw new Error("Ticket not found");
 
-    if (!snapshot.exists()) {
-      throw new Error('Ticket not found');
-    }
+  const ticket = Item as FeedbackTicket;
+  const response: FeedbackResponse = {
+    id: `resp-${Date.now()}`,
+    authorId,
+    authorName,
+    message,
+    timestamp: new Date().toISOString(),
+  };
 
-    const ticket = snapshot.val() as FeedbackTicket;
-
-    const newResponse: FeedbackResponse = {
-      id: `response-${Date.now()}`,
-      authorId,
-      authorName,
-      message,
-      timestamp: new Date().toISOString(),
-    };
-
-    const updatedResponses = [...ticket.responses, newResponse];
-
-    await update(ticketRef, {
-      responses: updatedResponses,
-      status: ticket.status === 'pending' ? 'in-progress' : ticket.status,
-      updatedAt: new Date().toISOString(),
-    });
-
-    // Notify user of response
-    // TODO: Send notification to user about response
-  } catch (error) {
-    console.error('Error adding response:', error);
-    throw error;
-  }
+  await docClient.send(
+    new UpdateCommand({
+      TableName: TABLES.FEEDBACK,
+      Key: { feedbackId: ticketId },
+      UpdateExpression: "SET responses = :r, #s = :s, updatedAt = :now",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":r": [...ticket.responses, response],
+        ":s": ticket.status === "pending" ? "in-progress" : ticket.status,
+        ":now": new Date().toISOString(),
+      },
+    })
+  );
 }
 
-/**
- * Update ticket status
- */
 export async function updateTicketStatus(
   ticketId: string,
-  status: FeedbackTicket['status'],
-  adminId: string
+  status: FeedbackTicket["status"]
 ): Promise<void> {
-  try {
-    const ticketRef = ref(db, `feedback/${ticketId}`);
-    const snapshot = await get(ticketRef);
-
-    if (!snapshot.exists()) {
-      throw new Error('Ticket not found');
-    }
-
-    const ticket = snapshot.val() as FeedbackTicket;
-
-    await update(ticketRef, {
-      status,
-      updatedAt: new Date().toISOString(),
-    });
-
-    // Notify user of status change
-    // TODO: Send notification to user about status change
-  } catch (error) {
-    console.error('Error updating ticket status:', error);
-    throw error;
-  }
+  await docClient.send(
+    new UpdateCommand({
+      TableName: TABLES.FEEDBACK,
+      Key: { feedbackId: ticketId },
+      UpdateExpression: "SET #s = :s, updatedAt = :now",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: { ":s": status, ":now": new Date().toISOString() },
+    })
+  );
 }
 
-/**
- * Assign ticket to admin
- */
-export async function assignTicket(
-  ticketId: string,
-  adminId: string
-): Promise<void> {
-  try {
-    const ticketRef = ref(db, `feedback/${ticketId}`);
-    const snapshot = await get(ticketRef);
-
-    if (!snapshot.exists()) {
-      throw new Error('Ticket not found');
-    }
-
-    await update(ticketRef, {
-      assignedTo: adminId,
-      status: 'in-progress',
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error('Error assigning ticket:', error);
-    throw error;
-  }
-}
-
-/**
- * Get ticket by ID
- */
 export async function getTicketById(ticketId: string): Promise<FeedbackTicket | null> {
   try {
-    const ticketRef = ref(db, `feedback/${ticketId}`);
-    const snapshot = await get(ticketRef);
-
-    if (!snapshot.exists()) {
-      return null;
-    }
-
-    return snapshot.val() as FeedbackTicket;
-  } catch (error) {
-    console.error('Error fetching ticket:', error);
+    const { Item } = await docClient.send(
+      new GetCommand({ TableName: TABLES.FEEDBACK, Key: { feedbackId: ticketId } })
+    );
+    return (Item as FeedbackTicket) ?? null;
+  } catch {
     return null;
   }
 }

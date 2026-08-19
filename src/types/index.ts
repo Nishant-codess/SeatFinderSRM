@@ -26,6 +26,7 @@ export type BookingStatus = 'pending' | 'active' | 'completed' | 'cancelled' | '
 
 export interface Booking {
   id: string;
+  bookingId?: string; // DynamoDB sort key alias
   seatId: string;
   userId: string;
   userName: string;

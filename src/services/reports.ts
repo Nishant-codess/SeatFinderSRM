@@ -1,349 +1,148 @@
-import type { ReportConfig, ReportData, ReportFormat, Booking, Seat } from '@/types';
-import { ref, get } from 'firebase/database';
-import { db } from '@/lib/firebase';
+import { ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { docClient, TABLES } from "@/lib/aws";
+import type { ReportConfig, ReportData, ReportFormat, Booking, Seat } from "@/types";
 
-/**
- * Report Service
- * Provides functions for generating and exporting custom reports
- */
-
-/**
- * Generate custom report based on configuration
- */
 export async function generateReport(config: ReportConfig): Promise<ReportData> {
-  try {
-    // Fetch bookings within date range
-    const bookings = await getBookingsInRange(config.dateRange.start, config.dateRange.end);
-    
-    // Fetch seats for occupancy calculations
-    const seats = await getAllSeats();
+  const [bookings, seats] = await Promise.all([
+    getBookingsInRange(config.dateRange.start, config.dateRange.end),
+    getAllSeats(),
+  ]);
 
-    // Apply filters
-    let filteredBookings = bookings;
-    if (config.filters?.section) {
-      const seatsBySection = seats.filter(s => s.section === config.filters?.section);
-      const seatIds = new Set(seatsBySection.map(s => s.id));
-      filteredBookings = filteredBookings.filter(b => seatIds.has(b.seatId));
+  let filtered = bookings;
+  if (config.filters?.section) {
+    const ids = new Set(seats.filter((s) => s.section === config.filters?.section).map((s) => s.id));
+    filtered = filtered.filter((b) => ids.has(b.seatId));
+  }
+
+  const summary: Record<string, number | string> = {};
+  config.metrics.forEach((metric) => {
+    switch (metric) {
+      case "occupancy":
+        summary["Occupancy Rate (%)"] = calcOccupancy(filtered, seats, config.dateRange.start, config.dateRange.end);
+        break;
+      case "no-show-rate":
+        summary["No-Show Rate (%)"] = calcNoShow(filtered);
+        break;
+      case "average-duration":
+        summary["Average Duration (hours)"] = calcAvgDuration(filtered);
+        break;
+      case "user-activity":
+        summary["Total Bookings"] = filtered.length;
+        summary["Active Users"] = new Set(filtered.map((b) => b.userId)).size;
+        break;
     }
+  });
 
-    // Calculate metrics
-    const summary: Record<string, number | string> = {};
-    const data: Array<Record<string, any>> = [];
+  const data = config.groupBy
+    ? groupBookings(filtered, config.groupBy)
+    : filtered.map((b) => ({
+        "Booking ID": b.id,
+        User: b.userName,
+        Seat: b.seatId,
+        "Start Time": b.startTime,
+        "End Time": b.endTime,
+        Status: b.status,
+        "Duration (min)": b.duration,
+      }));
 
-    config.metrics.forEach(metric => {
-      switch (metric) {
-        case 'occupancy':
-          summary['Occupancy Rate (%)'] = calculateOccupancyRate(
-            filteredBookings,
-            seats,
-            config.dateRange.start,
-            config.dateRange.end
-          );
-          break;
+  return {
+    title: `Report: ${config.metrics.join(", ")}`,
+    generatedAt: new Date().toISOString(),
+    dateRange: { start: config.dateRange.start.toISOString(), end: config.dateRange.end.toISOString() },
+    summary,
+    data,
+  };
+}
 
-        case 'no-show-rate':
-          summary['No-Show Rate (%)'] = calculateNoShowRate(filteredBookings);
-          break;
-
-        case 'average-duration':
-          summary['Average Duration (hours)'] = calculateAverageDuration(filteredBookings);
-          break;
-
-        case 'user-activity':
-          summary['Total Bookings'] = filteredBookings.length;
-          summary['Active Users'] = new Set(filteredBookings.map(b => b.userId)).size;
-          break;
-      }
+export async function exportReport(reportData: ReportData, format: ReportFormat): Promise<Blob> {
+  switch (format) {
+    case "csv": return exportCSV(reportData);
+    case "pdf": return new Blob([JSON.stringify(reportData, null, 2)], { type: "application/pdf" });
+    case "excel": return new Blob([JSON.stringify(reportData, null, 2)], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
-
-    // Group data if requested
-    if (config.groupBy) {
-      const grouped = groupBookings(filteredBookings, config.groupBy);
-      data.push(...grouped);
-    } else {
-      // Return raw booking data
-      data.push(...filteredBookings.map(b => ({
-        'Booking ID': b.id,
-        'User': b.userName,
-        'Seat': b.seatId,
-        'Start Time': b.startTime,
-        'End Time': b.endTime,
-        'Status': b.status,
-        'Duration (min)': b.duration,
-      })));
-    }
-
-    return {
-      title: `Report: ${config.metrics.join(', ')}`,
-      generatedAt: new Date().toISOString(),
-      dateRange: {
-        start: config.dateRange.start.toISOString(),
-        end: config.dateRange.end.toISOString(),
-      },
-      summary,
-      data,
-    };
-  } catch (error) {
-    console.error('Error generating report:', error);
-    throw error;
+    default: throw new Error(`Unsupported format: ${format}`);
   }
 }
 
-/**
- * Export report to specified format
- */
-export async function exportReport(
-  reportData: ReportData,
-  format: ReportFormat
-): Promise<Blob> {
+async function getBookingsInRange(start: Date, end: Date): Promise<Booking[]> {
   try {
-    switch (format) {
-      case 'csv':
-        return exportToCSV(reportData);
-      
-      case 'pdf':
-        return exportToPDF(reportData);
-      
-      case 'excel':
-        return exportToExcel(reportData);
-      
-      default:
-        throw new Error(`Unsupported format: ${format}`);
-    }
-  } catch (error) {
-    console.error('Error exporting report:', error);
-    throw error;
-  }
-}
-
-// Helper Functions
-
-/**
- * Fetch bookings within date range
- */
-async function getBookingsInRange(startDate: Date, endDate: Date): Promise<Booking[]> {
-  try {
-    const bookingsRef = ref(db, 'bookings');
-    const snapshot = await get(bookingsRef);
-
-    if (!snapshot.exists()) {
-      return [];
-    }
-
-    const bookings: Booking[] = [];
-    snapshot.forEach((child) => {
-      const booking = child.val() as Booking;
-      const bookingDate = new Date(booking.startTime);
-      
-      if (bookingDate >= startDate && bookingDate <= endDate) {
-        bookings.push(booking);
-      }
+    const { Items = [] } = await docClient.send(new ScanCommand({ TableName: TABLES.BOOKINGS }));
+    return (Items as Booking[]).filter((b) => {
+      const d = new Date(b.startTime);
+      return d >= start && d <= end;
     });
-
-    return bookings;
-  } catch (error) {
-    console.error('Error fetching bookings:', error);
-    return [];
-  }
+  } catch { return []; }
 }
 
-/**
- * Fetch all seats
- */
 async function getAllSeats(): Promise<Seat[]> {
   try {
-    const seatsRef = ref(db, 'seats');
-    const snapshot = await get(seatsRef);
-
-    if (!snapshot.exists()) {
-      return [];
-    }
-
-    const seats: Seat[] = [];
-    snapshot.forEach((child) => {
-      seats.push(child.val() as Seat);
-    });
-
-    return seats;
-  } catch (error) {
-    console.error('Error fetching seats:', error);
-    return [];
-  }
+    const { Items = [] } = await docClient.send(new ScanCommand({ TableName: TABLES.SEATS }));
+    return Items as Seat[];
+  } catch { return []; }
 }
 
-/**
- * Calculate occupancy rate
- */
-function calculateOccupancyRate(
-  bookings: Booking[],
-  seats: Seat[],
-  startDate: Date,
-  endDate: Date
-): number {
-  if (seats.length === 0 || bookings.length === 0) return 0;
-
-  const totalHours = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60);
-  if (totalHours <= 0) return 0;
-  
-  const totalAvailableHours = totalHours * seats.length;
-
-  const totalOccupiedMinutes = bookings
-    .filter(b => b.status === 'completed' || b.status === 'active')
-    .reduce((sum, booking) => {
-      const start = new Date(booking.startTime);
-      const end = booking.exitTime 
-        ? new Date(booking.exitTime) 
-        : new Date(booking.endTime);
-      
-      const clampedStart = start < startDate ? startDate : start;
-      const clampedEnd = end > endDate ? endDate : end;
-      
-      if (clampedEnd <= clampedStart) return sum;
-      
-      const duration = (clampedEnd.getTime() - clampedStart.getTime()) / (1000 * 60);
-      return sum + Math.max(0, duration);
-    }, 0);
-
-  const totalOccupiedHours = totalOccupiedMinutes / 60;
-  const rate = totalAvailableHours > 0 
-    ? (totalOccupiedHours / totalAvailableHours) * 100 
-    : 0;
-  
-  return Math.min(100, Math.max(0, Math.round(rate * 100) / 100));
+function calcOccupancy(bookings: Booking[], seats: Seat[], start: Date, end: Date): number {
+  if (!seats.length || !bookings.length) return 0;
+  const totalHrs = (end.getTime() - start.getTime()) / 3_600_000;
+  if (totalHrs <= 0) return 0;
+  const occupied = bookings
+    .filter((b) => b.status === "completed" || b.status === "active")
+    .reduce((s, b) => {
+      const bs = new Date(b.startTime) < start ? start : new Date(b.startTime);
+      const be = b.exitTime ? new Date(b.exitTime) : new Date(b.endTime);
+      const bc = be > end ? end : be;
+      return s + Math.max(0, (bc.getTime() - bs.getTime()) / 60_000);
+    }, 0) / 60;
+  return Math.min(100, Math.max(0, Math.round((occupied / (totalHrs * seats.length)) * 10000) / 100));
 }
 
-/**
- * Calculate no-show rate
- */
-function calculateNoShowRate(bookings: Booking[]): number {
-  if (bookings.length === 0) return 0;
-  const noShowCount = bookings.filter(b => b.status === 'no-show').length;
-  return Math.round((noShowCount / bookings.length) * 10000) / 100;
+function calcNoShow(bookings: Booking[]): number {
+  if (!bookings.length) return 0;
+  return Math.round((bookings.filter((b) => b.status === "no-show").length / bookings.length) * 10000) / 100;
 }
 
-/**
- * Calculate average duration
- */
-function calculateAverageDuration(bookings: Booking[]): number {
-  const completedBookings = bookings.filter(
-    b => b.status === 'completed' && b.exitTime
-  );
-
-  if (completedBookings.length === 0) return 0;
-
-  const totalDuration = completedBookings.reduce((sum, booking) => {
-    const start = new Date(booking.startTime);
-    const end = new Date(booking.exitTime!);
-    const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-    return sum + Math.max(0, hours);
-  }, 0);
-
-  return Math.round((totalDuration / completedBookings.length) * 100) / 100;
+function calcAvgDuration(bookings: Booking[]): number {
+  const done = bookings.filter((b) => b.status === "completed" && b.exitTime);
+  if (!done.length) return 0;
+  const total = done.reduce((s, b) => s + Math.max(0, (new Date(b.exitTime!).getTime() - new Date(b.startTime).getTime()) / 3_600_000), 0);
+  return Math.round((total / done.length) * 100) / 100;
 }
 
-/**
- * Group bookings by time period
- */
-function groupBookings(
-  bookings: Booking[],
-  groupBy: 'day' | 'week' | 'month'
-): Array<Record<string, any>> {
+function groupBookings(bookings: Booking[], by: "day" | "week" | "month"): Array<Record<string, unknown>> {
   const grouped: Record<string, Booking[]> = {};
-
-  bookings.forEach(booking => {
-    const date = new Date(booking.startTime);
-    let key: string;
-
-    switch (groupBy) {
-      case 'day':
-        key = date.toISOString().split('T')[0];
-        break;
-      case 'week':
-        const weekStart = getWeekStart(date);
-        key = weekStart.toISOString().split('T')[0];
-        break;
-      case 'month':
-        key = date.toISOString().substring(0, 7);
-        break;
-    }
-
-    if (!grouped[key]) {
-      grouped[key] = [];
-    }
-    grouped[key].push(booking);
+  bookings.forEach((b) => {
+    const d = new Date(b.startTime);
+    let key = by === "day" ? d.toISOString().split("T")[0]
+      : by === "week" ? (() => { const w = new Date(d); const dd = w.getDate() - w.getDay() + (w.getDay() === 0 ? -6 : 1); return new Date(w.setDate(dd)).toISOString().split("T")[0]; })()
+      : d.toISOString().substring(0, 7);
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(b);
   });
-
   return Object.entries(grouped)
-    .map(([period, periodBookings]) => ({
+    .map(([period, bs]) => ({
       Period: period,
-      'Total Bookings': periodBookings.length,
-      'Completed': periodBookings.filter(b => b.status === 'completed').length,
-      'No-Shows': periodBookings.filter(b => b.status === 'no-show').length,
-      'Cancelled': periodBookings.filter(b => b.status === 'cancelled').length,
+      "Total Bookings": bs.length,
+      Completed: bs.filter((b) => b.status === "completed").length,
+      "No-Shows": bs.filter((b) => b.status === "no-show").length,
+      Cancelled: bs.filter((b) => b.status === "cancelled").length,
     }))
-    .sort((a, b) => a.Period.localeCompare(b.Period));
+    .sort((a, b) => String(a.Period).localeCompare(String(b.Period)));
 }
 
-/**
- * Get week start date (Monday)
- */
-function getWeekStart(date: Date): Date {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  return new Date(d.setDate(diff));
-}
-
-/**
- * Export to CSV format
- */
-function exportToCSV(reportData: ReportData): Blob {
-  let csv = `${reportData.title}\n`;
-  csv += `Generated: ${reportData.generatedAt}\n`;
-  csv += `Date Range: ${reportData.dateRange.start} to ${reportData.dateRange.end}\n\n`;
-
-  // Summary section
-  csv += 'Summary\n';
-  Object.entries(reportData.summary).forEach(([key, value]) => {
-    csv += `${key},${value}\n`;
-  });
-  csv += '\n';
-
-  // Data section
-  if (reportData.data.length > 0) {
-    const headers = Object.keys(reportData.data[0]);
-    csv += headers.join(',') + '\n';
-
-    reportData.data.forEach(row => {
-      const values = headers.map(header => {
-        const value = row[header];
-        // Escape commas and quotes
-        if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
-          return `"${value.replace(/"/g, '""')}"`;
-        }
-        return value;
-      });
-      csv += values.join(',') + '\n';
+function exportCSV(report: ReportData): Blob {
+  let csv = `${report.title}\nGenerated: ${report.generatedAt}\nDate Range: ${report.dateRange.start} to ${report.dateRange.end}\n\nSummary\n`;
+  Object.entries(report.summary).forEach(([k, v]) => { csv += `${k},${v}\n`; });
+  csv += "\n";
+  if (report.data.length) {
+    const headers = Object.keys(report.data[0]);
+    csv += headers.join(",") + "\n";
+    report.data.forEach((row) => {
+      csv += headers.map((h) => {
+        const v = String(row[h] ?? "");
+        return v.includes(",") || v.includes('"') ? `"${v.replace(/"/g, '""')}"` : v;
+      }).join(",") + "\n";
     });
   }
-
-  return new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-}
-
-/**
- * Export to PDF format (simplified - would use a library like jsPDF in production)
- */
-function exportToPDF(reportData: ReportData): Blob {
-  // This is a placeholder - in production, use jsPDF or similar
-  const content = JSON.stringify(reportData, null, 2);
-  return new Blob([content], { type: 'application/pdf' });
-}
-
-/**
- * Export to Excel format (simplified - would use a library like xlsx in production)
- */
-function exportToExcel(reportData: ReportData): Blob {
-  // This is a placeholder - in production, use xlsx or similar
-  const content = JSON.stringify(reportData, null, 2);
-  return new Blob([content], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  return new Blob([csv], { type: "text/csv;charset=utf-8;" });
 }

@@ -10,8 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Loader2, Send } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/components/providers/auth-provider';
-import { ref, push, set } from 'firebase/database';
-import { db } from '@/lib/firebase';
 import type { FeedbackCategory } from '@/types';
 
 interface FeedbackFormProps {
@@ -37,69 +35,33 @@ export function FeedbackForm({ onSubmitSuccess }: FeedbackFormProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!user) {
-      toast({
-        variant: 'destructive',
-        title: 'Not Authenticated',
-        description: 'Please sign in to submit feedback.',
-      });
-      return;
-    }
-
+    if (!user) return;
     if (!formData.category || !formData.subject || !formData.description) {
-      toast({
-        variant: 'destructive',
-        title: 'Missing Information',
-        description: 'Please fill in all required fields.',
-      });
+      toast({ variant: 'destructive', title: 'Missing Information', description: 'Please fill in all required fields.' });
       return;
     }
 
     setLoading(true);
-
     try {
-      // Write directly to Firebase (client-side)
-      const feedbackRef = ref(db, 'feedback');
-      const newFeedbackRef = push(feedbackRef);
-      
-      const feedbackData = {
-        id: newFeedbackRef.key,
-        userId: user.uid,
-        userName: user.displayName || user.email?.split('@')[0] || 'User',
-        userEmail: user.email || '',
-        category: formData.category,
-        subject: formData.subject,
-        description: formData.description,
-        status: 'pending',
-        priority: 'low',
-        responses: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      await set(newFeedbackRef, feedbackData);
-
-      toast({
-        title: 'Feedback Submitted',
-        description: 'Thank you for your feedback! We will review it shortly.',
+      const res = await fetch('/api/feedback/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user.accessToken}` },
+        body: JSON.stringify({
+          userId: user.uid,
+          userName: user.email?.split('@')[0] || 'User',
+          userEmail: user.email || '',
+          ...formData,
+          attachments: [],
+        }),
       });
 
-      // Reset form
-      setFormData({
-        category: '',
-        subject: '',
-        description: '',
-      });
+      if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to submit');
 
+      toast({ title: 'Feedback Submitted', description: 'Thank you! We will review it shortly.' });
+      setFormData({ category: '', subject: '', description: '' });
       onSubmitSuccess?.();
     } catch (error: any) {
-      console.error('Error submitting feedback:', error);
-      toast({
-        variant: 'destructive',
-        title: 'Submission Failed',
-        description: error.message || 'Failed to submit feedback. Please try again.',
-      });
+      toast({ variant: 'destructive', title: 'Submission Failed', description: error.message });
     } finally {
       setLoading(false);
     }
@@ -109,69 +71,35 @@ export function FeedbackForm({ onSubmitSuccess }: FeedbackFormProps) {
     <Card>
       <CardHeader>
         <CardTitle>Submit Feedback</CardTitle>
-        <CardDescription>
-          Report issues, request features, or share your thoughts with us
-        </CardDescription>
+        <CardDescription>Report issues, request features, or share your thoughts</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="category">Category *</Label>
-            <Select
-              value={formData.category}
-              onValueChange={(value) => setFormData({ ...formData, category: value as FeedbackCategory })}
-            >
-              <SelectTrigger id="category">
-                <SelectValue placeholder="Select a category" />
-              </SelectTrigger>
+            <Select value={formData.category} onValueChange={(v) => setFormData({ ...formData, category: v as FeedbackCategory })}>
+              <SelectTrigger id="category"><SelectValue placeholder="Select a category" /></SelectTrigger>
               <SelectContent>
-                {categories.map((cat) => (
-                  <SelectItem key={cat.value} value={cat.value}>
-                    {cat.label}
-                  </SelectItem>
-                ))}
+                {categories.map((cat) => <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="subject">Subject *</Label>
-            <Input
-              id="subject"
-              placeholder="Brief description of your feedback"
-              value={formData.subject}
-              onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
-              maxLength={100}
-            />
+            <Input id="subject" placeholder="Brief description" value={formData.subject}
+              onChange={(e) => setFormData({ ...formData, subject: e.target.value })} maxLength={100} />
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="description">Description *</Label>
-            <Textarea
-              id="description"
-              placeholder="Provide detailed information about your feedback"
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              rows={6}
-              maxLength={1000}
-            />
-            <p className="text-xs text-muted-foreground">
-              {formData.description.length}/1000 characters
-            </p>
+            <Textarea id="description" placeholder="Detailed information" value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })} rows={6} maxLength={1000} />
+            <p className="text-xs text-muted-foreground">{formData.description.length}/1000 characters</p>
           </div>
 
           <Button type="submit" disabled={loading} className="w-full">
-            {loading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Submitting...
-              </>
-            ) : (
-              <>
-                <Send className="mr-2 h-4 w-4" />
-                Submit Feedback
-              </>
-            )}
+            {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Submitting...</> : <><Send className="mr-2 h-4 w-4" />Submit Feedback</>}
           </Button>
         </form>
       </CardContent>

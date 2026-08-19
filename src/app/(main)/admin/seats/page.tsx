@@ -1,18 +1,30 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ref, get, update } from 'firebase/database';
-import { db } from '@/lib/firebase';
+import { useAuth } from '@/components/providers/auth-provider';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { RefreshCw, Armchair, Wrench, CheckCircle2, Circle } from 'lucide-react';
 import type { Seat } from '@/types';
 
+const STATUS_STYLES: Record<string, { ring: string; bg: string; dot: string; label: string }> = {
+  available:       { ring: 'ring-green-500/40',  bg: 'bg-green-500/10 hover:bg-green-500/20',   dot: 'bg-green-500',  label: 'Available' },
+  reserved:        { ring: 'ring-blue-500/40',   bg: 'bg-blue-500/10 hover:bg-blue-500/20',    dot: 'bg-blue-500',   label: 'Reserved' },
+  occupied:        { ring: 'ring-yellow-500/40', bg: 'bg-yellow-500/10 hover:bg-yellow-500/20', dot: 'bg-yellow-500', label: 'Occupied' },
+  maintenance:     { ring: 'ring-orange-500/40', bg: 'bg-orange-500/10 hover:bg-orange-500/20', dot: 'bg-orange-500', label: 'Maintenance' },
+  'out-of-service':{ ring: 'ring-red-500/40',    bg: 'bg-red-500/10 hover:bg-red-500/20',      dot: 'bg-red-500',    label: 'Out of Service' },
+};
+
+const FLOOR_LABELS: Record<string, string> = {
+  ground: 'Ground Floor', first: 'First Floor', second: 'Second Floor', third: 'Third Floor',
+};
+
 export default function SeatsPage() {
+  const { user: admin } = useAuth();
   const [seats, setSeats] = useState<Seat[]>([]);
   const [selectedSeat, setSelectedSeat] = useState<Seat | null>(null);
   const [maintenanceReason, setMaintenanceReason] = useState('');
@@ -20,29 +32,23 @@ export default function SeatsPage() {
   const [loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  useEffect(() => {
-    fetchSeats();
-  }, []);
+  useEffect(() => { fetchSeats(); }, []);
 
   const fetchSeats = async () => {
     setLoading(true);
     try {
-      const seatsRef = ref(db, 'seats');
-      const snapshot = await get(seatsRef);
-      
-      const seatsList: Seat[] = [];
-      if (snapshot.exists()) {
-        snapshot.forEach((floorSnapshot) => {
-          floorSnapshot.forEach((seatSnapshot) => {
-            seatsList.push(seatSnapshot.val() as Seat);
-          });
-        });
-      }
-      
-      console.log('Fetched seats:', seatsList.length);
-      setSeats(seatsList);
-    } catch (error) {
-      console.error('Error fetching seats:', error);
+      const res = await fetch('/api/seats');
+      const data = await res.json();
+      const floorMap: Record<string, any> = data.seats ?? {};
+      const flat: Seat[] = [];
+      Object.values(floorMap).forEach((floorSeats: any) => {
+        Object.values(floorSeats).forEach((seat: any) =>
+          flat.push({ ...seat, id: seat.seatId ?? seat.id } as Seat)
+        );
+      });
+      setSeats(flat);
+    } catch {
+      console.error('Error fetching seats');
     } finally {
       setLoading(false);
     }
@@ -50,249 +56,211 @@ export default function SeatsPage() {
 
   const handleMarkMaintenance = async (seatId: string, action: string) => {
     try {
-      // Find the seat in Firebase - seats are stored as seats/{floor}/{seatId}
-      const seatsRef = ref(db, 'seats');
-      const snapshot = await get(seatsRef);
-      
-      let seatPath: string | null = null;
-      
-      if (snapshot.exists()) {
-        snapshot.forEach((floorSnapshot) => {
-          floorSnapshot.forEach((seatSnapshot) => {
-            const seat = seatSnapshot.val();
-            if (seat.id === seatId) {
-              seatPath = `seats/${floorSnapshot.key}/${seatSnapshot.key}`;
-            }
-          });
-        });
-      }
-      
-      if (!seatPath) {
-        console.error(`Seat ${seatId} not found`);
-        return;
-      }
-      
-      const seatRef = ref(db, seatPath);
-      const { update } = await import('firebase/database');
-      
-      switch (action) {
-        case 'maintenance':
-          await update(seatRef, {
-            status: 'maintenance',
-            maintenanceInfo: {
-              reason: maintenanceReason,
-              reportedBy: 'admin',
-              expectedRestoration,
-              startedAt: new Date().toISOString(),
-            }
-          });
-          console.log('Seat marked for maintenance');
-          break;
-          
-        case 'out-of-service':
-          await update(seatRef, {
-            status: 'out-of-service',
-            maintenanceInfo: {
-              reason: maintenanceReason,
-              reportedBy: 'admin',
-              expectedRestoration,
-              startedAt: new Date().toISOString(),
-            }
-          });
-          console.log('Seat marked out of service');
-          break;
-          
-        case 'restore':
-          await update(seatRef, {
-            status: 'available',
-            maintenanceInfo: null
-          });
-          console.log('Seat restored to service');
-          break;
-          
-        default:
-          console.error('Invalid action');
-          return;
-      }
-      
-      // Refresh seats list
+      await fetch('/api/admin/seats/maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin?.accessToken ?? ''}` },
+        body: JSON.stringify({
+          seatId,
+          action,
+          maintenanceInfo: action !== 'restore' ? {
+            reason: maintenanceReason,
+            reportedBy: admin?.email ?? 'admin',
+            expectedRestoration,
+            startedAt: new Date().toISOString(),
+          } : undefined,
+        }),
+      });
       await fetchSeats();
-      
-      // Close dialog and reset form
       setDialogOpen(false);
       setMaintenanceReason('');
       setExpectedRestoration('');
       setSelectedSeat(null);
-    } catch (error) {
-      console.error('Error updating seat:', error);
+    } catch {
+      console.error('Error updating seat');
     }
   };
 
+  const seatsByFloor = seats.reduce((acc, seat) => {
+    const prefix = seat.id.charAt(0).toUpperCase();
+    const floorMap: Record<string, string> = { G: 'ground', F: 'first', S: 'second', T: 'third' };
+    const key = floorMap[prefix] ?? 'unknown';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(seat);
+    return acc;
+  }, {} as Record<string, Seat[]>);
+
+  const floorOrder = ['ground', 'first', 'second', 'third'];
+
+  const statusSummary = {
+    available: seats.filter((s) => s.status === 'available').length,
+    occupied: seats.filter((s) => s.status === 'occupied' || s.status === 'reserved').length,
+    maintenance: seats.filter((s) => s.status === 'maintenance' || s.status === 'out-of-service').length,
+  };
+
   return (
-    <div className="space-y-6">
-      <h1 className="text-3xl font-bold">Seat Management</h1>
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Seat Management</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{seats.length} seats total</p>
+        </div>
+        <Button onClick={fetchSeats} disabled={loading} size="sm" variant="outline" className="gap-1.5">
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+      </div>
 
-      {seats.length === 0 ? (
-        <Card>
-          <CardContent className="py-8">
-            <p className="text-center text-muted-foreground">No seats available</p>
-          </CardContent>
-        </Card>
+      {/* Summary */}
+      {seats.length > 0 && (
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: 'Available', value: statusSummary.available, icon: CheckCircle2, color: 'text-green-500', bg: 'bg-green-500/10' },
+            { label: 'In Use', value: statusSummary.occupied, icon: Armchair, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+            { label: 'Maintenance', value: statusSummary.maintenance, icon: Wrench, color: 'text-orange-500', bg: 'bg-orange-500/10' },
+          ].map(({ label, value, icon: Icon, color, bg }) => (
+            <div key={label} className="rounded-lg border bg-card p-4 flex items-center gap-3">
+              <div className={`rounded-lg p-2 ${bg}`}>
+                <Icon className={`h-4 w-4 ${color}`} />
+              </div>
+              <div>
+                <p className="text-2xl font-bold leading-none">{value}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+        {Object.entries(STATUS_STYLES).map(([key, { dot, label }]) => (
+          <span key={key} className="flex items-center gap-1.5">
+            <span className={`h-2 w-2 rounded-full ${dot}`} />
+            {label}
+          </span>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-primary" />
+        </div>
+      ) : seats.length === 0 ? (
+        <div className="rounded-lg border border-dashed flex flex-col items-center justify-center py-16">
+          <Armchair className="h-10 w-10 text-muted-foreground/40 mb-3" />
+          <p className="text-muted-foreground font-medium">No seats found</p>
+        </div>
       ) : (
-        // Group seats by floor based on seat ID prefix (G=Ground, F=First, S=Second, T=Third)
-        (() => {
-          const seatsByFloor = seats.reduce((acc, seat) => {
-            // Get floor from seat ID prefix
-            const prefix = seat.id.charAt(0).toUpperCase();
-            let floorKey = '';
-            
-            switch (prefix) {
-              case 'G': floorKey = 'ground'; break;
-              case 'F': floorKey = 'first'; break;
-              case 'S': floorKey = 'second'; break;
-              case 'T': floorKey = 'third'; break;
-              default: floorKey = 'unknown'; break;
-            }
-            
-            if (!acc[floorKey]) acc[floorKey] = [];
-            acc[floorKey].push(seat);
-            return acc;
-          }, {} as Record<string, Seat[]>);
-
-          const floorOrder = ['ground', 'first', 'second', 'third'];
-          const floorLabels: Record<string, string> = {
-            ground: 'Ground Floor',
-            first: 'First Floor',
-            second: 'Second Floor',
-            third: 'Third Floor',
-          };
-
-          return floorOrder
-            .filter(floor => seatsByFloor[floor] && seatsByFloor[floor].length > 0)
-            .map((floor) => (
-              <Card key={floor}>
-                <CardHeader>
-                  <CardTitle>{floorLabels[floor]}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-4 gap-4">
-                    {seatsByFloor[floor]
-                      .sort((a, b) => a.id.localeCompare(b.id))
-                      .map((seat) => {
-                      const statusColors: Record<string, string> = {
-                        available: 'border-green-500 hover:bg-green-50 dark:hover:bg-green-950',
-                        reserved: 'border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950',
-                        occupied: 'border-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-950',
-                        maintenance: 'border-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950',
-                        'out-of-service': 'border-red-500 hover:bg-red-50 dark:hover:bg-red-950',
-                      };
-                      
+        floorOrder
+          .filter((floor) => seatsByFloor[floor]?.length > 0)
+          .map((floor) => (
+            <Card key={floor}>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base font-semibold">{FLOOR_LABELS[floor]}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
+                  {seatsByFloor[floor]
+                    .sort((a, b) => a.id.localeCompare(b.id))
+                    .map((seat) => {
+                      const style = STATUS_STYLES[seat.status] ?? STATUS_STYLES.available;
                       return (
-                        <Dialog key={seat.id} open={dialogOpen && selectedSeat?.id === seat.id} onOpenChange={(open) => {
-                          setDialogOpen(open);
-                          if (!open) {
-                            setSelectedSeat(null);
-                            setMaintenanceReason('');
-                            setExpectedRestoration('');
-                          }
-                        }}>
+                        <Dialog
+                          key={seat.id}
+                          open={dialogOpen && selectedSeat?.id === seat.id}
+                          onOpenChange={(open) => {
+                            setDialogOpen(open);
+                            if (!open) { setSelectedSeat(null); setMaintenanceReason(''); setExpectedRestoration(''); }
+                          }}
+                        >
                           <DialogTrigger asChild>
-                            <Button
-                              variant="outline"
-                              className={`h-20 ${statusColors[seat.status] || ''}`}
-                              onClick={() => {
-                                setSelectedSeat(seat);
-                                setDialogOpen(true);
-                              }}
+                            <button
+                              onClick={() => { setSelectedSeat(seat); setDialogOpen(true); }}
+                              className={`rounded-lg p-2 ring-1 text-center transition-all cursor-pointer ${style.ring} ${style.bg}`}
                             >
-                              <div className="text-center">
-                                <div className="font-bold">{seat.id}</div>
-                                <div className="text-xs text-muted-foreground capitalize">{seat.status}</div>
-                              </div>
-                            </Button>
+                              <p className="text-xs font-bold">{seat.id}</p>
+                              <span className={`inline-block h-1.5 w-1.5 rounded-full mt-1 ${style.dot}`} />
+                            </button>
                           </DialogTrigger>
                           <DialogContent>
                             <DialogHeader>
-                              <DialogTitle>Seat {seat.number}</DialogTitle>
-                              <DialogDescription>Manage seat maintenance status</DialogDescription>
+                              <DialogTitle>Seat {seat.id}</DialogTitle>
+                              <DialogDescription>
+                                Current status: <strong className="capitalize">{seat.status}</strong>
+                              </DialogDescription>
                             </DialogHeader>
-                            <div className="space-y-5 py-4">
-                              <div className="space-y-2">
-                                <Label htmlFor="reason" className="text-sm font-medium">
-                                  Maintenance Reason
-                                </Label>
+                            <div className="space-y-4 py-2">
+                              <div className="space-y-1.5">
+                                <Label>Maintenance Reason</Label>
                                 <Textarea
-                                  id="reason"
                                   value={maintenanceReason}
                                   onChange={(e) => setMaintenanceReason(e.target.value)}
-                                  placeholder="Describe the issue or reason for maintenance..."
-                                  className="min-h-[80px] resize-none"
+                                  placeholder="Describe the issue…"
+                                  className="resize-none"
                                   rows={3}
                                 />
                               </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="restoration-date" className="text-sm font-medium">
-                                  Expected Restoration Date
-                                </Label>
-                                <Input
-                                  id="restoration-date"
-                                  type="date"
-                                  value={expectedRestoration.split('T')[0] || ''}
-                                  onChange={(e) => {
-                                    const time = expectedRestoration.split('T')[1] || '09:00';
-                                    setExpectedRestoration(`${e.target.value}T${time}`);
-                                  }}
-                                  min={new Date().toISOString().split('T')[0]}
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="restoration-time" className="text-sm font-medium">
-                                  Expected Restoration Time
-                                </Label>
-                                <Input
-                                  id="restoration-time"
-                                  type="time"
-                                  value={expectedRestoration.split('T')[1] || '09:00'}
-                                  onChange={(e) => {
-                                    const date = expectedRestoration.split('T')[0] || new Date().toISOString().split('T')[0];
-                                    setExpectedRestoration(`${date}T${e.target.value}`);
-                                  }}
-                                />
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1.5">
+                                  <Label>Restoration Date</Label>
+                                  <Input
+                                    type="date"
+                                    value={expectedRestoration.split('T')[0] || ''}
+                                    onChange={(e) => {
+                                      const time = expectedRestoration.split('T')[1] || '09:00';
+                                      setExpectedRestoration(`${e.target.value}T${time}`);
+                                    }}
+                                    min={new Date().toISOString().split('T')[0]}
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label>Restoration Time</Label>
+                                  <Input
+                                    type="time"
+                                    value={expectedRestoration.split('T')[1] || '09:00'}
+                                    onChange={(e) => {
+                                      const date = expectedRestoration.split('T')[0] || new Date().toISOString().split('T')[0];
+                                      setExpectedRestoration(`${date}T${e.target.value}`);
+                                    }}
+                                  />
+                                </div>
                               </div>
                             </div>
-                            <DialogFooter className="flex flex-col sm:flex-row gap-2">
-                              <Button 
+                            <DialogFooter className="flex-col sm:flex-row gap-2">
+                              <Button
+                                size="sm"
                                 onClick={() => handleMarkMaintenance(seat.id, 'maintenance')}
-                                className="w-full sm:w-auto"
                                 disabled={!maintenanceReason || !expectedRestoration}
+                                className="gap-1.5"
                               >
-                                Mark Maintenance
+                                <Wrench className="h-3.5 w-3.5" /> Mark Maintenance
                               </Button>
-                              <Button 
-                                variant="destructive" 
+                              <Button
+                                size="sm"
+                                variant="destructive"
                                 onClick={() => handleMarkMaintenance(seat.id, 'out-of-service')}
-                                className="w-full sm:w-auto"
                                 disabled={!maintenanceReason || !expectedRestoration}
                               >
                                 Out of Service
                               </Button>
-                              <Button 
-                                variant="outline" 
+                              <Button
+                                size="sm"
+                                variant="outline"
                                 onClick={() => handleMarkMaintenance(seat.id, 'restore')}
-                                className="w-full sm:w-auto"
+                                className="gap-1.5"
                               >
-                                Restore to Service
+                                <CheckCircle2 className="h-3.5 w-3.5" /> Restore
                               </Button>
                             </DialogFooter>
                           </DialogContent>
                         </Dialog>
                       );
                     })}
-                  </div>
-                </CardContent>
-              </Card>
-            ));
-        })()
+                </div>
+              </CardContent>
+            </Card>
+          ))
       )}
     </div>
   );

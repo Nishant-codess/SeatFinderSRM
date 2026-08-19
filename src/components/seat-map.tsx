@@ -2,17 +2,29 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { ref, onValue, off, set, update, query, orderByChild, equalTo } from 'firebase/database';
-import { auth, db } from '@/lib/firebase';
 import { Seat } from '@/components/seat';
 import type { Seat as SeatType, Booking } from '@/types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/components/providers/auth-provider';
+import { AlertTriangle, Search, X } from 'lucide-react';
 
 const FLOORS = ["Ground", "First", "Second", "Third"];
 const SEATS_PER_FLOOR = 50;
+
+interface LibraryStatus {
+  isOpen: boolean;
+  todayHours?: { open: string; close: string; isClosed: boolean };
+  isHoliday?: boolean;
+  holidayName?: string;
+}
+
+const LEGEND = [
+  { label: 'Available',   color: 'bg-card border-2 border-primary/70' },
+  { label: 'Reserved',    color: 'bg-accent/80 border-2 border-accent' },
+  { label: 'Occupied',    color: 'bg-green-500/80 border-2 border-green-600' },
+  { label: 'Maintenance', color: 'bg-muted border-2 border-muted-foreground/30' },
+];
 
 export function SeatMap() {
   const [seats, setSeats] = useState<Record<string, Record<string, SeatType>>>({});
@@ -20,301 +32,159 @@ export function SeatMap() {
   const [activeBooking, setActiveBooking] = useState<Booking | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showAvailableOnly, setShowAvailableOnly] = useState(false);
-  const { toast } = useToast();
+  const [libraryStatus, setLibraryStatus] = useState<LibraryStatus | null>(null);
   const { user } = useAuth();
-  
-  const initializeSeats = useCallback(async () => {
+
+  const fetchSeats = useCallback(async () => {
     try {
-      const seatStructure: Record<string, Record<string, any>> = {};
-      FLOORS.forEach(floor => {
-        const floorKey = floor.toLowerCase();
-        seatStructure[floorKey] = {};
-        for (let i = 1; i <= SEATS_PER_FLOOR; i++) {
-          const seatId = `${floor.charAt(0).toUpperCase()}${i.toString().padStart(2, '0')}`;
-          seatStructure[floorKey][seatId] = {
-            id: seatId,
-            status: 'available',
-            bookedBy: null,
-            bookedAt: null,
-            bookingId: null,
-            occupiedUntil: null,
-          };
-        }
+      const res = await fetch('/api/seats');
+      if (!res.ok) return;
+      const data = await res.json();
+      setSeats(data.seats ?? {});
+    } catch {} finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchActiveBooking = useCallback(async () => {
+    if (!user) { setActiveBooking(null); return; }
+    try {
+      const res = await fetch('/api/bookings/active', {
+        headers: { Authorization: `Bearer ${user.accessToken}` },
       });
-      await set(ref(db, 'seats'), seatStructure);
-      toast({ title: "Success", description: "Seat map has been initialized for the first time." });
-    } catch (error: any) {
-      toast({ variant: 'destructive', title: "Database Error", description: `Failed to initialize seats: ${error.message}` });
-    }
-  }, [toast]);
-
-  // Listen for user's active booking
-  useEffect(() => {
-    if (!user) {
-      setActiveBooking(null);
-      return;
-    }
-
-    const bookingsRef = ref(db, `bookings/${user.uid}`);
-    
-    const listener = onValue(bookingsRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        // Find any booking with status 'pending' or 'active'
-        const activeBookingEntry = Object.entries(data).find(([_, bookingData]: [string, any]) => 
-          bookingData.status === 'pending' || bookingData.status === 'active'
-        );
-        
-        if (activeBookingEntry) {
-          const [bookingId, bookingData] = activeBookingEntry;
-          setActiveBooking({ id: bookingId, ...(bookingData as any) });
-        } else {
-          setActiveBooking(null);
-        }
-      } else {
-        setActiveBooking(null);
-      }
-    });
-
-    return () => off(bookingsRef, 'value', listener);
+      if (!res.ok) return;
+      const data = await res.json();
+      setActiveBooking(data.booking ?? null);
+    } catch {}
   }, [user]);
 
   useEffect(() => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-
-    const seatsRef = ref(db, 'seats');
-    const listener = onValue(seatsRef, (snapshot) => {
-      const data = snapshot.val();
-
-      // Core expiry logic: any user loading the map cleans up expired seats.
-      if (data) {
-        const updates: {[key: string]: any} = {};
-        const now = Date.now();
-        const BOOKING_EXPIRY_MS = 150 * 1000; // 2.5 minutes for pre-booking
-
-        Object.entries(data as Record<string, Record<string, SeatType>>).forEach(([floor, seatsOnFloor]) => {
-          Object.entries(seatsOnFloor).forEach(([seatId, seatData]) => {
-            const seatPath = `seats/${floor}/${seatId}`;
-
-            // Case 1: Handle 'reserved' seats that were not confirmed in time
-            if (seatData.status === 'reserved') {
-              // If bookedAt is missing or invalid, free the seat immediately
-              if (!seatData.bookedAt || !seatData.bookedBy || !seatData.bookingId) {
-                updates[`${seatPath}/status`] = 'available';
-                updates[`${seatPath}/bookedBy`] = null;
-                updates[`${seatPath}/bookedAt`] = null;
-                updates[`${seatPath}/bookingId`] = null;
-                updates[`${seatPath}/occupiedUntil`] = null;
-              } else if ((now - seatData.bookedAt) > BOOKING_EXPIRY_MS) {
-                // Booking expired
-                updates[`${seatPath}/status`] = 'available';
-                updates[`${seatPath}/bookedBy`] = null;
-                updates[`${seatPath}/bookedAt`] = null;
-                updates[`${seatPath}/bookingId`] = null;
-                updates[`${seatPath}/occupiedUntil`] = null;
-
-                // Only try to update booking if it's the current user's booking
-                if (seatData.bookedBy === user?.uid) {
-                  const bookingPath = `bookings/${seatData.bookedBy}/${seatData.bookingId}`;
-                  updates[`${bookingPath}/status`] = 'expired';
-                }
-              }
-            }
-
-            // Case 2: Handle 'occupied' seats where the user has overstayed
-            if (seatData.status === 'occupied') {
-              // If occupiedUntil is missing or invalid, free the seat after 24 hours from bookedAt
-              if (!seatData.occupiedUntil) {
-                const maxOccupiedTime = seatData.bookedAt ? seatData.bookedAt + (24 * 60 * 60 * 1000) : now;
-                if (now > maxOccupiedTime) {
-                  updates[`${seatPath}/status`] = 'available';
-                  updates[`${seatPath}/bookedBy`] = null;
-                  updates[`${seatPath}/bookedAt`] = null;
-                  updates[`${seatPath}/bookingId`] = null;
-                  updates[`${seatPath}/occupiedUntil`] = null;
-                }
-              } else if (now > seatData.occupiedUntil) {
-                // Normal expiry
-                updates[`${seatPath}/status`] = 'available';
-                updates[`${seatPath}/bookedBy`] = null;
-                updates[`${seatPath}/bookedAt`] = null;
-                updates[`${seatPath}/bookingId`] = null;
-                updates[`${seatPath}/occupiedUntil`] = null;
-
-                // Only try to update booking if it's the current user's booking
-                if (seatData.bookedBy === user?.uid && seatData.bookingId) {
-                  const bookingPath = `bookings/${seatData.bookedBy}/${seatData.bookingId}`;
-                  updates[`${bookingPath}/status`] = 'completed';
-                  updates[`${bookingPath}/exitTime`] = new Date(seatData.occupiedUntil).toISOString();
-                }
-              }
-            }
-          });
-        });
-
-        if (Object.keys(updates).length > 0) {
-          update(ref(db), updates).catch(error => {
-            console.error("Failed to update seats:", error);
-          });
-        }
-      }
-      
-      // Standard rendering logic
-      if (data) {
-        setSeats(data);
-      } else {
-        // No seats found, initializing
-        initializeSeats().then(() => {
-          console.log('Database initialized');
-        }).catch((error: any) => {
-          console.error('Failed to initialize database:', error);
-        });
-      }
-      setLoading(false);
-    }, (error) => {
-      console.error("Firebase read failed: " + error.message);
-      setLoading(false);
-      if (auth.currentUser) {
-        toast({ 
-          variant: 'destructive', 
-          title: "Database Connection Error", 
-          description: "Could not read from the database. Please check your security rules." 
-        });
-      }
-    });
-
-    return () => off(seatsRef, 'value', listener);
-  }, [initializeSeats, toast, user]);
+    fetchSeats();
+    fetchActiveBooking();
+    fetch('/api/settings').then((r) => r.json()).then(setLibraryStatus).catch(() => {});
+    const si = setInterval(fetchSeats, 10_000);
+    const bi = setInterval(fetchActiveBooking, 10_000);
+    return () => { clearInterval(si); clearInterval(bi); };
+  }, [fetchSeats, fetchActiveBooking]);
 
   const getSeatCounts = (floor: string) => {
     const floorSeats = seats[floor.toLowerCase()] || {};
-    const counts = { available: 0, reserved: 0, occupied: 0, maintenance: 0, 'out-of-service': 0 };
-    Object.values(floorSeats).forEach((seat) => {
-      if (seat.status in counts) {
-        counts[seat.status as keyof typeof counts]++;
-      }
-    });
-    return counts;
+    let available = 0;
+    Object.values(floorSeats).forEach((s) => { if (s.status === 'available') available++; });
+    return { available, total: Object.keys(floorSeats).length || SEATS_PER_FLOOR };
   };
 
-  const filterSeats = (floorSeats: Record<string, SeatType>) => {
-    return Object.entries(floorSeats).filter(([seatId, seatData]) => {
-      // Search filter
-      if (searchTerm && !seatId.toLowerCase().includes(searchTerm.toLowerCase())) {
-        return false;
-      }
-      // Availability filter
-      if (showAvailableOnly && seatData.status !== 'available') {
-        return false;
-      }
+  const filterSeats = (floorSeats: Record<string, SeatType>) =>
+    Object.entries(floorSeats).filter(([id, s]) => {
+      if (searchTerm && !id.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+      if (showAvailableOnly && s.status !== 'available') return false;
       return true;
     });
-  };
+
+  const hasFilters = searchTerm || showAvailableOnly;
 
   return (
-    <div className="w-full max-w-7xl mx-auto space-y-6">
-      {/* Search and Filter Controls */}
-      <div className="flex flex-col sm:flex-row gap-4 items-center justify-between bg-card rounded-lg border p-4">
-        <div className="flex-1 w-full sm:w-auto">
+    <div className="w-full space-y-4">
+      {/* Library closed banner */}
+      {libraryStatus && !libraryStatus.isOpen && (
+        <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>
+            {libraryStatus.isHoliday
+              ? `Library is closed today — ${libraryStatus.holidayName}.`
+              : libraryStatus.todayHours?.isClosed
+              ? 'Library is closed today. See you next working day!'
+              : `Library is currently closed. Opens at ${libraryStatus.todayHours?.open ?? '09:00'}.`}
+          </span>
+        </div>
+      )}
+
+      {/* Search + filter bar */}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Search seat number (e.g., G01, F15)..."
+            placeholder="Search seat (e.g. G01, F15)…"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full px-4 py-2 rounded-md border bg-background"
+            className="h-9 w-full rounded-md border bg-background pl-8 pr-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
         </div>
-        <div className="flex items-center gap-2">
+        <label className="flex items-center gap-2 rounded-md border bg-background px-3 h-9 cursor-pointer text-sm select-none">
           <input
             type="checkbox"
-            id="available-only"
             checked={showAvailableOnly}
             onChange={(e) => setShowAvailableOnly(e.target.checked)}
             className="rounded"
           />
-          <label htmlFor="available-only" className="text-sm font-medium cursor-pointer">
-            Show available only
-          </label>
-        </div>
-        {(searchTerm || showAvailableOnly) && (
+          Available only
+        </label>
+        {hasFilters && (
           <button
-            onClick={() => {
-              setSearchTerm('');
-              setShowAvailableOnly(false);
-            }}
-            className="text-sm text-primary hover:underline"
+            onClick={() => { setSearchTerm(''); setShowAvailableOnly(false); }}
+            className="flex items-center gap-1.5 h-9 px-3 rounded-md border text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            Clear filters
+            <X className="h-3.5 w-3.5" /> Clear
           </button>
         )}
       </div>
 
+      {/* Floor tabs */}
       <Tabs defaultValue="ground" className="w-full">
-        <div className="flex justify-center items-center mb-6">
-          <TabsList className="grid w-full max-w-2xl grid-cols-2 sm:grid-cols-4 h-auto">
-            {FLOORS.map(floor => {
-              const counts = loading ? null : getSeatCounts(floor);
-              return (
-                <TabsTrigger 
-                  key={floor} 
-                  value={floor.toLowerCase()} 
-                  className="flex flex-col gap-1 py-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-                >
-                  <span className="font-semibold text-sm sm:text-base">{floor}</span>
-                  {counts && (
-                    <span className="text-xs opacity-80">
-                      {counts.available}/{SEATS_PER_FLOOR}
-                    </span>
-                  )}
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
-        </div>
-        
+        <TabsList className="grid w-full grid-cols-4 h-auto mb-1">
+          {FLOORS.map((floor) => {
+            const { available, total } = loading ? { available: 0, total: SEATS_PER_FLOOR } : getSeatCounts(floor);
+            return (
+              <TabsTrigger
+                key={floor}
+                value={floor.toLowerCase()}
+                className="flex flex-col gap-0.5 py-2.5"
+              >
+                <span className="text-xs sm:text-sm font-semibold">{floor}</span>
+                {!loading && (
+                  <span className="text-[10px] opacity-70">
+                    {available}/{total} free
+                  </span>
+                )}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+
         {loading ? (
-          <div className="bg-card rounded-lg border p-4">
-            <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-10 gap-2 sm:gap-3">
+          <div className="rounded-lg border bg-card p-4">
+            <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2">
               {Array.from({ length: SEATS_PER_FLOOR }).map((_, i) => (
                 <Skeleton key={i} className="aspect-square rounded-lg" />
               ))}
             </div>
           </div>
         ) : (
-          FLOORS.map(floor => (
-            <TabsContent key={floor} value={floor.toLowerCase()} className="mt-0">
-              <div className="bg-card rounded-lg border p-3 sm:p-4 md:p-6">
-                {(() => {
-                  const filteredSeats = filterSeats(seats[floor.toLowerCase()] || {});
-                  
-                  if (filteredSeats.length === 0) {
-                    return (
-                      <div className="text-center py-12 text-muted-foreground">
-                        <p>No seats match your search criteria</p>
-                        <button
-                          onClick={() => {
-                            setSearchTerm('');
-                            setShowAvailableOnly(false);
-                          }}
-                          className="mt-2 text-primary hover:underline"
-                        >
-                          Clear filters
-                        </button>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-10 gap-2 sm:gap-3 md:gap-4">
-                      {filteredSeats
-                        .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+          FLOORS.map((floor) => {
+            const filtered = filterSeats(seats[floor.toLowerCase()] || {});
+            return (
+              <TabsContent key={floor} value={floor.toLowerCase()} className="mt-0">
+                <div className="rounded-lg border bg-card p-3 sm:p-4">
+                  {filtered.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
+                      <Search className="h-8 w-8 opacity-30 mb-2" />
+                      <p className="text-sm">No seats match your filters</p>
+                      <button
+                        onClick={() => { setSearchTerm(''); setShowAvailableOnly(false); }}
+                        className="mt-2 text-xs text-primary hover:underline"
+                      >
+                        Clear filters
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2 sm:gap-3">
+                      {filtered
+                        .sort(([a], [b]) => a.localeCompare(b))
                         .map(([seatId, seatData]) => (
-                          <Seat 
-                            key={seatId} 
-                            id={seatId} 
+                          <Seat
+                            key={seatId}
+                            id={seatId}
                             status={seatData.status}
                             bookedBy={seatData.bookedBy}
                             currentUserId={user?.uid}
@@ -322,37 +192,27 @@ export function SeatMap() {
                           />
                         ))}
                     </div>
-                  );
-                })()}
-              </div>
-            </TabsContent>
-          ))
+                  )}
+                </div>
+              </TabsContent>
+            );
+          })
         )}
       </Tabs>
-      
+
       {/* Legend */}
-      <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-sm bg-muted/50 rounded-lg p-4">
-        <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-md bg-card border-2 border-primary/80"></div>
-          <span className="font-medium">Available</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-md bg-accent/80 border-2 border-accent"></div>
-          <span className="font-medium">Reserved</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-md bg-green-500/80 border-2 border-green-600"></div>
-          <span className="font-medium">Occupied</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-md bg-gray-300 dark:bg-gray-700 border-2 border-gray-400 dark:border-gray-600"></div>
-          <span className="font-medium">Maintenance</span>
-        </div>
-        {activeBooking && activeBooking.status === 'pending' && (
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-md bg-yellow-500/80 border-2 border-yellow-600"></div>
-            <span className="font-medium">Your Reservation</span>
-          </div>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground px-1">
+        {LEGEND.map(({ label, color }) => (
+          <span key={label} className="flex items-center gap-1.5">
+            <span className={`h-3.5 w-3.5 rounded ${color}`} />
+            {label}
+          </span>
+        ))}
+        {activeBooking?.status === 'pending' && (
+          <span className="flex items-center gap-1.5">
+            <span className="h-3.5 w-3.5 rounded bg-yellow-400/80 border-2 border-yellow-500" />
+            Your Booking
+          </span>
         )}
       </div>
     </div>

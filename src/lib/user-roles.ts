@@ -1,42 +1,76 @@
-import { ref, get, set } from 'firebase/database';
-import { db } from './firebase';
+import { GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { AdminUpdateUserAttributesCommand } from "@aws-sdk/client-cognito-identity-provider";
+import { docClient, cognitoAdmin, TABLES } from "./aws";
 
-// Admin emails - move to environment variable later
-const ADMIN_EMAILS = ['tp6382@srmist.edu.in'];
-
-export async function initializeUserRole(userId: string, email: string, displayName?: string) {
+async function isAdminEmail(email: string): Promise<boolean> {
   try {
-    const userRef = ref(db, `users/${userId}`);
-    const snapshot = await get(userRef);
-    
-    if (!snapshot.exists()) {
-      // Create new user with role
-      const role = ADMIN_EMAILS.includes(email) ? 'admin' : 'user';
-      await set(userRef, {
-        email,
-        displayName: displayName || email.split('@')[0],
-        role,
-        createdAt: new Date().toISOString(),
-      });
-      console.log(`User ${email} initialized with role: ${role}`);
-    }
-  } catch (error) {
-    console.error('Error initializing user role:', error);
+    const { Item } = await docClient.send(
+      new GetCommand({ TableName: TABLES.ADMINS, Key: { email } })
+    );
+    return !!(Item?.isActive);
+  } catch {
+    return false;
   }
 }
 
-export async function getUserRole(userId: string): Promise<'admin' | 'user' | null> {
+export async function initializeUserRole(
+  userId: string,
+  email: string,
+  displayName?: string
+) {
   try {
-    const userRef = ref(db, `users/${userId}/role`);
-    const snapshot = await get(userRef);
-    return snapshot.exists() ? snapshot.val() : null;
+    const { Item } = await docClient.send(
+      new GetCommand({ TableName: TABLES.USERS, Key: { userId } })
+    );
+
+    if (!Item) {
+      const role = (await isAdminEmail(email)) ? "admin" : "user";
+
+      await docClient.send(
+        new PutCommand({
+          TableName: TABLES.USERS,
+          Item: {
+            userId,
+            email,
+            displayName: displayName ?? email.split("@")[0],
+            role,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            stats: {
+              totalBookings: 0,
+              noShowCount: 0,
+              overstayCount: 0,
+              totalHoursBooked: 0,
+            },
+          },
+          ConditionExpression: "attribute_not_exists(userId)",
+        })
+      );
+
+      await cognitoAdmin.send(
+        new AdminUpdateUserAttributesCommand({
+          UserPoolId: process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID!,
+          Username: email,
+          UserAttributes: [{ Name: "custom:role", Value: role }],
+        })
+      ).catch(() => {});
+    }
   } catch (error) {
-    console.error('Error getting user role:', error);
+    console.error("Error initializing user role:", error);
+  }
+}
+
+export async function getUserRole(userId: string): Promise<"admin" | "user" | null> {
+  try {
+    const { Item } = await docClient.send(
+      new GetCommand({ TableName: TABLES.USERS, Key: { userId } })
+    );
+    return (Item?.role as "admin" | "user") ?? null;
+  } catch {
     return null;
   }
 }
 
 export async function isAdmin(userId: string): Promise<boolean> {
-  const role = await getUserRole(userId);
-  return role === 'admin';
+  return (await getUserRole(userId)) === "admin";
 }

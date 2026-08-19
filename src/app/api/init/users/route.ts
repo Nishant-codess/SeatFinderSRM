@@ -1,52 +1,16 @@
-import { NextResponse } from 'next/server';
-import { ref, set } from 'firebase/database';
-import { db } from '@/lib/firebase';
+import { NextRequest, NextResponse } from "next/server";
+import { initializeUserRole } from "@/lib/user-roles";
 
-/**
- * Initialize users bucket in Firebase
- * Visit: http://localhost:3000/api/init/users
- */
-export async function GET() {
+export async function POST(request: NextRequest) {
   try {
-    const usersRef = ref(db, 'users');
-    
-    // Create sample user profile
-    const sampleUsers = {
-      'sample_user_001': {
-        uid: 'sample_user_001',
-        email: 'sample@example.com',
-        displayName: 'Sample User',
-        role: 'user',
-        restrictions: {
-          isFlagged: false,
-        },
-        stats: {
-          totalBookings: 0,
-          noShowCount: 0,
-          overstayCount: 0,
-          totalHoursBooked: 0,
-        },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }
-    };
-
-    await set(usersRef, sampleUsers);
-
-    return NextResponse.json({
-      success: true,
-      message: 'Users bucket initialized successfully!',
-      data: sampleUsers,
-    });
-  } catch (error: any) {
-    console.error('Error initializing users:', error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Failed to initialize users bucket',
-        details: error.message,
-      },
-      { status: 500 }
-    );
+    const { userId, email, displayName } = await request.json();
+    if (!userId || !email) {
+      return NextResponse.json({ error: "Missing userId or email" }, { status: 400 });
+    }
+    await initializeUserRole(userId, email, displayName);
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Error initializing user:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

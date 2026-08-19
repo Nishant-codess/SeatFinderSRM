@@ -2,242 +2,126 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { ref, onValue, off, query, orderByChild } from 'firebase/database';
-import { db } from '@/lib/firebase';
 import { useAuth } from '@/components/providers/auth-provider';
 import type { Booking } from '@/types';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { format } from 'date-fns';
-import { Badge } from './ui/badge';
 import { cn } from '@/lib/utils';
 import QRCode from 'react-qr-code';
 import { Button } from './ui/button';
-import { Download, Info } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Download, CheckCircle2, Clock, Armchair } from 'lucide-react';
 import QRCodeLib from 'qrcode';
 
 function ActiveBookingCard({ booking }: { booking: Booking }) {
-    const { user } = useAuth();
-    const [countdown, setCountdown] = useState(0);
+  const { user } = useAuth();
+  const [countdown, setCountdown] = useState(0);
 
-    // This useEffect now only handles the visual countdown timer.
-    // The actual expiry logic is now centralized in MainLayout.
-    useEffect(() => {
-        if (booking.status !== 'pending' && booking.status !== 'active') return;
+  useEffect(() => {
+    if (booking.status !== 'pending' && booking.status !== 'active') return;
 
-        const calculateRemaining = () => {
-            const bookingTime = new Date(booking.bookingTime).getTime();
-            const now = Date.now();
-            const elapsed = (now - bookingTime) / 1000;
-            return Math.max(0, 150 - elapsed);
-        }
+    const calc = () => Math.max(0, 300 - (Date.now() - new Date(booking.bookingTime).getTime()) / 1000);
+    setCountdown(calc());
+    const t = setInterval(() => {
+      const r = calc();
+      setCountdown(r);
+      if (r <= 0) clearInterval(t);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [booking]);
 
-        setCountdown(calculateRemaining());
+  const downloadQRCode = async () => {
+    if (!user) return;
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      canvas.width = 600; canvas.height = 700;
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 28px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('SeatFinderSRM', canvas.width / 2, 60);
+      ctx.font = '16px Arial';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText(`Seat ${booking.seatId}`, canvas.width / 2, 90);
 
-        const timer = setInterval(() => {
-            const remaining = calculateRemaining();
-            setCountdown(remaining);
+      const qrData = JSON.stringify({ bookingId: booking.id, userId: user.uid, seatId: booking.seatId });
+      const qrUrl = await QRCodeLib.toDataURL(qrData, { width: 300, margin: 1 });
+      const qrImg = new Image();
+      await new Promise<void>((resolve, reject) => { qrImg.onload = () => resolve(); qrImg.onerror = () => reject(); qrImg.src = qrUrl; });
+      ctx.fillStyle = '#ffffff';
+      ctx.roundRect(150, 120, 300, 300, 12);
+      ctx.fill();
+      ctx.drawImage(qrImg, 160, 130, 280, 280);
 
-            if (remaining <= 0) {
-                clearInterval(timer);
-            }
-        }, 1000);
+      const link = document.createElement('a');
+      link.download = `SeatFinderSRM-${booking.seatId}-${new Date(booking.bookingTime).toISOString().split('T')[0]}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } catch { console.error('QR download error'); }
+  };
 
-        return () => clearInterval(timer);
-    }, [booking]);
-
-
-    const downloadQRCode = async () => {
-        if (!user) return;
-
-        try {
-          const canvas = document.createElement("canvas");
-          const ctx = canvas.getContext("2d");
-          if (!ctx) return;
-
-          // Set canvas size for high quality
-          canvas.width = 800;
-          canvas.height = 1000;
-
-          // Background - dark like library seats page
-          ctx.fillStyle = '#1e293b'; // Dark slate background
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-          // Load and draw logo
-          const logo = new Image();
-          logo.crossOrigin = "anonymous";
-          logo.src = '/images/logo.png';
-          
-          await new Promise((resolve) => {
-            logo.onload = resolve;
-            logo.onerror = resolve; // Continue even if logo fails
-          });
-
-          // Draw logo at top
-          if (logo.complete && logo.width > 0) {
-            const logoSize = 80;
-            ctx.drawImage(logo, (canvas.width - logoSize) / 2, 40, logoSize, logoSize);
-          }
-
-          // Site name
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 42px Arial';
-          ctx.textAlign = 'center';
-          ctx.fillText('SeatFinderSRM', canvas.width / 2, 160);
-
-          // Subtitle
-          ctx.font = '20px Arial';
-          ctx.fillStyle = '#94a3b8';
-          ctx.fillText('Library Seat Booking', canvas.width / 2, 190);
-
-          // White card background for QR and details
-          ctx.fillStyle = '#ffffff';
-          ctx.roundRect(50, 230, canvas.width - 100, 680, 20);
-          ctx.fill();
-
-          // Black placeholder box for QR code with padding
-          const qrBoxSize = 360;
-          const qrBoxX = (canvas.width - qrBoxSize) / 2;
-          ctx.fillStyle = '#000000';
-          ctx.roundRect(qrBoxX, 250, qrBoxSize, qrBoxSize, 10);
-          ctx.fill();
-
-          // Booking details FIRST
-          const bookingTime = new Date(booking.bookingTime);
-          const duration = booking.duration || 60;
-          const endDateTime = new Date(bookingTime.getTime() + duration * 60000);
-          
-          ctx.fillStyle = '#1e293b';
-          ctx.font = 'bold 28px Arial';
-          ctx.textAlign = 'center';
-          ctx.fillText(`Seat ${booking.seatId}`, canvas.width / 2, 620);
-
-        // Details box
-        ctx.fillStyle = '#f1f5f9';
-        ctx.roundRect(80, 650, canvas.width - 160, 230, 15);
-        ctx.fill();
-
-        // Detail items
-        const details = [
-          { label: 'Booked By', value: user.email?.split('@')[0] || 'Student' },
-          { label: 'Booking Time', value: bookingTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
-          { label: 'Duration', value: `${duration} minutes` },
-          { label: 'End Time', value: endDateTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
-        ];
-
-        ctx.textAlign = 'left';
-        let yPos = 690;
-        details.forEach((detail) => {
-          ctx.fillStyle = '#64748b';
-          ctx.font = '16px Arial';
-          ctx.fillText(detail.label, 110, yPos);
-          
-          ctx.fillStyle = '#1e293b';
-          ctx.font = 'bold 18px Arial';
-          ctx.fillText(detail.value, 110, yPos + 25);
-          
-          yPos += 55;
-        });
-
-          // Footer
-          ctx.fillStyle = '#ffffff';
-          ctx.font = '16px Arial';
-          ctx.textAlign = 'center';
-          ctx.fillText('Scan this QR code at the library entrance', canvas.width / 2, 950);
-
-          // NOW draw QR code LAST so it's on top
-          // White background for QR with padding
-          const qrWhiteBg = 320;
-          const qrWhiteBgX = (canvas.width - qrWhiteBg) / 2;
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(qrWhiteBgX, 270, qrWhiteBg, qrWhiteBg);
-
-          // Generate QR code directly using qrcode library
-          const qrData = JSON.stringify({bookingId: booking.id, userId: user?.uid, seatId: booking.seatId});
-          const qrDataUrl = await QRCodeLib.toDataURL(qrData, {
-            width: 300,
-            margin: 0,
-            color: {
-              dark: '#000000',
-              light: '#ffffff'
-            }
-          });
-
-          // Load and draw QR code
-          const qrImg = new Image();
-          await new Promise<void>((resolve, reject) => {
-            qrImg.onload = () => resolve();
-            qrImg.onerror = (e) => {
-              console.error('QR Image load error:', e);
-              reject(new Error('Failed to load QR'));
-            };
-            qrImg.src = qrDataUrl;
-          });
-
-          // Draw QR code on white background - LAST so it's on top
-          const qrSize = 300;
-          const qrX = (canvas.width - qrSize) / 2;
-          ctx.drawImage(qrImg, qrX, 280, qrSize, qrSize);
-
-          // Download
-          const pngFile = canvas.toDataURL("image/png");
-          const downloadLink = document.createElement("a");
-          downloadLink.download = `SeatFinderSRM-${booking.seatId}-${bookingTime.toISOString().split('T')[0]}.png`;
-          downloadLink.href = pngFile;
-          downloadLink.click();
-        } catch (error) {
-          console.error('QR Download error:', error);
-        }
-      };
-    
-    if (booking.status === 'active') {
-        return (
-             <Alert variant="default" className="mb-6 bg-green-500/10 border-green-500/30">
-                <Info className="h-4 w-4 text-green-500" />
-                <AlertTitle className="text-green-500">You're Checked In!</AlertTitle>
-                <AlertDescription>
-                 You are currently occupying seat <span className='font-bold'>{booking.seatId}</span>. Enjoy your study session!
-                </AlertDescription>
-              </Alert>
-        )
-    }
-
+  if (booking.status === 'active') {
     return (
-        <Card className="mb-6 bg-secondary shadow-lg">
-            <CardHeader>
-                <CardTitle className="font-headline text-2xl">Your Active Booking</CardTitle>
-                <CardDescription>Scan this QR code at the library entrance to check in.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col md:flex-row items-center gap-6">
-                <div className="bg-white p-4 rounded-lg shadow-md border">
-                    <QRCode id="DashboardQRCode" value={JSON.stringify({bookingId: booking.id, userId: user?.uid, seatId: booking.seatId})} size={180} />
-                </div>
-                <div className="flex-1 text-center md:text-left space-y-2">
-                    <h3 className="text-3xl font-bold font-headline">Seat {booking.seatId}</h3>
-                    <div className="text-destructive font-bold text-2xl font-mono tracking-tight">
-                        {Math.floor(countdown / 60)}:{(Math.round(countdown) % 60).toString().padStart(2, '0')}
-                    </div>
-                     <p className="text-muted-foreground -mt-1">Booked for {booking.duration} minutes.</p>
-                     <Button onClick={downloadQRCode} className="mt-4 w-full md:w-auto">
-                        <Download className="mr-2 h-4 w-4" /> Download QR Code
-                     </Button>
-                     <p className="text-xs text-muted-foreground mt-2">
-                       To cancel this booking, go to the seat map and click on your booked seat.
-                     </p>
-                </div>
-            </CardContent>
-        </Card>
-    )
+      <div className="rounded-xl border bg-green-500/8 border-green-500/20 p-4 flex items-start gap-3">
+        <div className="rounded-full bg-green-500/15 p-2 shrink-0 mt-0.5">
+          <CheckCircle2 className="h-4 w-4 text-green-500" />
+        </div>
+        <div>
+          <p className="font-semibold text-green-600 dark:text-green-400">Checked In</p>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            You&apos;re currently at seat <span className="font-mono font-semibold text-foreground">{booking.seatId}</span>. Enjoy your study session!
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const mins = Math.floor(countdown / 60);
+  const secs = Math.round(countdown % 60).toString().padStart(2, '0');
+  const isUrgent = countdown <= 60;
+
+  return (
+    <div className="rounded-xl border bg-card p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Active Booking</p>
+          <p className="text-xl font-bold mt-0.5">Seat {booking.seatId}</p>
+        </div>
+        <div className={cn('text-right', isUrgent && 'text-destructive')}>
+          <p className="text-xs text-muted-foreground">Time to check in</p>
+          <p className="text-2xl font-mono font-bold">{mins}:{secs}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row items-center gap-5">
+        <div className="bg-white p-3 rounded-lg border shrink-0">
+          <QRCode
+            value={JSON.stringify({ bookingId: booking.id, userId: user?.uid, seatId: booking.seatId })}
+            size={140}
+          />
+        </div>
+        <div className="flex-1 text-sm space-y-2 text-center sm:text-left">
+          <p className="text-muted-foreground">Scan this QR code at the library entrance to check in.</p>
+          <p className="text-muted-foreground">Booked for <span className="font-medium text-foreground">{booking.duration} minutes</span>.</p>
+          <Button onClick={downloadQRCode} variant="outline" size="sm" className="gap-1.5 mt-1">
+            <Download className="h-3.5 w-3.5" /> Save QR
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
+
+const STATUS_STYLE: Record<string, string> = {
+  active:    'bg-green-500/15 text-green-700 dark:text-green-400',
+  pending:   'bg-yellow-500/15 text-yellow-700 dark:text-yellow-400',
+  completed: 'bg-muted text-muted-foreground',
+  expired:   'bg-red-500/10 text-red-500',
+  cancelled: 'bg-muted text-muted-foreground',
+};
 
 export function BookingHistory() {
   const { user } = useAuth();
@@ -245,139 +129,81 @@ export function BookingHistory() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-    
-    const bookingsRef = ref(db, `bookings/${user.uid}`);
-    
-    const listener = onValue(bookingsRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const bookingsList = Object.entries(data).map(([key, value]) => ({
-          id: key,
-          ...(value as Omit<Booking, 'id'>)
-        }));
-        // Sort by booking time, newest first
-        bookingsList.sort((a, b) => {
-          const timeA = new Date(a.bookingTime).getTime();
-          const timeB = new Date(b.bookingTime).getTime();
-          return timeB - timeA;
-        });
-        setBookings(bookingsList);
-      } else {
-        setBookings([]);
-      }
-      setLoading(false);
-    }, (error) => {
-      console.error("Failed to fetch bookings:", error);
-      setBookings([]);
-      setLoading(false);
-    });
-
-    return () => off(bookingsRef, 'value', listener);
+    if (!user) { setLoading(false); return; }
+    fetch('/api/bookings', { headers: { Authorization: `Bearer ${user.accessToken}` } })
+      .then((r) => r.json())
+      .then((data) => setBookings(
+        (data.bookings ?? []).map((b: any) => ({ ...b, id: b.bookingId ?? b.id }))
+      ))
+      .catch(() => setBookings([]))
+      .finally(() => setLoading(false));
   }, [user]);
-  
-  const getBadgeVariant = (status: Booking['status']) => {
-    switch (status) {
-      case 'active':
-        return 'default';
-      case 'pending':
-        return 'secondary';
-      case 'expired':
-        return 'destructive';
-      case 'completed':
-        return 'outline';
-      default:
-        return 'outline';
-    }
-  };
 
-  const activeBooking = bookings.find(b => b.status === 'pending' || b.status === 'active');
+  const activeBooking = bookings.find((b) => b.status === 'pending' || b.status === 'active');
+  const historyBookings = bookings.filter((b) => b.status !== 'pending' && b.status !== 'active');
 
   return (
     <div className="space-y-6">
       {activeBooking && <ActiveBookingCard booking={activeBooking} />}
-      
+
       <Card>
-        <CardHeader>
-          <CardTitle>Booking History</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-semibold">Booking History</CardTitle>
           <CardDescription>Your past and current seat bookings</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[100px]">Seat ID</TableHead>
-                  <TableHead>Booking Time</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Entry Time</TableHead>
-                  <TableHead>Exit Time</TableHead>
-                  <TableHead className="text-right">Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>
-                      <TableCell><Skeleton className="h-5 w-16" /></TableCell>
-                      <TableCell><Skeleton className="h-5 w-36" /></TableCell>
-                      <TableCell><Skeleton className="h-5 w-20" /></TableCell>
-                      <TableCell><Skeleton className="h-5 w-36" /></TableCell>
-                      <TableCell><Skeleton className="h-5 w-36" /></TableCell>
-                      <TableCell className="text-right"><Skeleton className="h-6 w-24 rounded-full ml-auto" /></TableCell>
-                    </TableRow>
-                  ))
-                ) : bookings.length > 0 ? (
-                  bookings.map((booking) => {
-                    const bookingDate = new Date(booking.bookingTime);
-                    const entryDate = booking.entryTime ? new Date(booking.entryTime) : null;
-                    const exitDate = booking.exitTime ? new Date(booking.exitTime) : null;
-                    
-                    // Calculate actual duration from entry and exit times for completed bookings
-                    let displayDuration = 'N/A';
-                    if (entryDate && exitDate && !isNaN(entryDate.getTime()) && !isNaN(exitDate.getTime())) {
-                      const durationMs = exitDate.getTime() - entryDate.getTime();
-                      const durationMins = Math.round(durationMs / 60000);
-                      displayDuration = `${durationMins} mins`;
-                    } else if (booking.duration) {
-                      // For pending/active bookings, show planned duration
-                      displayDuration = `${booking.duration} mins`;
-                    }
-                    
-                    return (
-                    <TableRow key={booking.id}>
-                      <TableCell className="font-medium">{booking.seatId}</TableCell>
-                      <TableCell>{!isNaN(bookingDate.getTime()) ? format(bookingDate, "PPp") : '—'}</TableCell>
-                      <TableCell>{displayDuration}</TableCell>
-                      <TableCell>{entryDate && !isNaN(entryDate.getTime()) ? format(entryDate, "p") : '—'}</TableCell>
-                      <TableCell>{exitDate && !isNaN(exitDate.getTime()) ? format(exitDate, "p") : '—'}</TableCell>
-                      <TableCell className="text-right">
-                        <Badge 
-                          variant={getBadgeVariant(booking.status)}
-                          className={cn('capitalize', {
-                            'bg-green-500/80 text-green-950 dark:text-green-50': booking.status === 'active',
-                            'bg-yellow-400/80 text-yellow-950 dark:text-yellow-50': booking.status === 'pending',
-                          })}
-                        >
+          {loading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-14 w-full rounded-lg" />
+              ))}
+            </div>
+          ) : bookings.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Armchair className="h-10 w-10 text-muted-foreground/30 mb-3" />
+              <p className="font-medium text-muted-foreground">No bookings yet</p>
+              <p className="text-sm text-muted-foreground/70 mt-1">Book a seat to get started</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {bookings.map((booking) => {
+                const bookingDate = new Date(booking.bookingTime);
+                const entryDate = booking.entryTime ? new Date(booking.entryTime) : null;
+                const exitDate = booking.exitTime ? new Date(booking.exitTime) : null;
+                let duration = booking.duration ? `${booking.duration}m` : '—';
+                if (entryDate && exitDate) {
+                  duration = `${Math.round((exitDate.getTime() - entryDate.getTime()) / 60000)}m`;
+                }
+
+                return (
+                  <div key={booking.id} className="flex items-center gap-3 rounded-lg border bg-card/50 px-4 py-3 hover:bg-muted/30 transition-colors">
+                    <div className="h-8 w-8 rounded bg-muted flex items-center justify-center shrink-0">
+                      <span className="text-xs font-bold font-mono">{booking.seatId?.slice(0, 3)}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm font-semibold">{booking.seatId}</span>
+                        <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded-full capitalize', STATUS_STYLE[booking.status] ?? STATUS_STYLE.completed)}>
                           {booking.status}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                    );
-                  })
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center">
-                      No bookings found.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {!isNaN(bookingDate.getTime()) ? format(bookingDate, 'MMM d, yyyy · h:mm a') : '—'}
+                        {duration !== '—' && ` · ${duration}`}
+                      </p>
+                    </div>
+                    {entryDate && (
+                      <div className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground">
+                        <Clock className="h-3 w-3" />
+                        {format(entryDate, 'h:mm a')}
+                        {exitDate && <> → {format(exitDate, 'h:mm a')}</>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

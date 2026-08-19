@@ -3,20 +3,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Html5Qrcode } from 'html5-qrcode';
-import { ref, update, get } from 'firebase/database';
-import { db } from '@/lib/firebase';
 import { useToast } from '@/hooks/use-toast';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { LogIn, LogOut, Camera, CameraOff, Loader2, Upload } from 'lucide-react';
+import { LogIn, LogOut, Camera, CameraOff, Loader2, Upload, CheckCircle2, ScanLine } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import jsQR from 'jsqr';
 
@@ -26,344 +15,205 @@ export function QrScanner() {
   const [mode, setMode] = useState<ScanMode>('entry');
   const [isScanning, setIsScanning] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [lastScan, setLastScan] = useState<string>('');
+  const [lastScan, setLastScan] = useState('');
+  const [lastResult, setLastResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const router = useRouter();
 
   const processQRCode = useCallback(async (decodedText: string) => {
-    // Prevent duplicate scans
-    if (decodedText === lastScan || isProcessing) {
-      return;
-    }
-
+    if (decodedText === lastScan || isProcessing) return;
     setLastScan(decodedText);
     setIsProcessing(true);
+    setLastResult(null);
 
     try {
-      const { bookingId, userId, seatId } = JSON.parse(decodedText);
+      const payload = JSON.parse(decodedText);
+      const { bookingId, userId, seatId } = payload;
+      if (!bookingId || !userId || !seatId) throw new Error('Invalid QR code');
 
-      if (!bookingId || !userId || !seatId) {
-        throw new Error("Invalid QR Code");
-      }
-      
-      const floor = seatId.charAt(0).toLowerCase() === 'g' ? 'ground' : 
-                    seatId.charAt(0).toLowerCase() === 'f' ? 'first' : 
-                    seatId.charAt(0).toLowerCase() === 's' ? 'second' : 'third';
-      const seatRefPath = `seats/${floor}/${seatId}`;
-      const bookingRefPath = `bookings/${userId}/${bookingId}`;
-
-      const updates: { [key: string]: any } = {};
-      const now = new Date();
-
-      if (mode === 'entry') {
-        const bookingRef = ref(db, bookingRefPath);
-        const bookingSnapshot = await get(bookingRef);
-        
-        if (!bookingSnapshot.exists()) {
-          throw new Error("Booking not found.");
-        }
-        
-        const bookingData = bookingSnapshot.val();
-
-        if (bookingData.status !== 'pending') {
-          throw new Error(`Cannot check in. Booking is ${bookingData.status}.`);
-        }
-
-        const duration = bookingData.duration;
-        if (!duration) {
-          throw new Error("Invalid booking duration.");
-        }
-        
-        const expiryTimestamp = now.getTime() + duration * 60 * 1000;
-
-        updates[`${seatRefPath}/status`] = 'occupied';
-        updates[`${seatRefPath}/occupiedUntil`] = expiryTimestamp;
-        updates[`${bookingRefPath}/status`] = 'active';
-        updates[`${bookingRefPath}/entryTime`] = now.toISOString();
-
-        await update(ref(db), updates);
-
-        toast({ 
-          title: '✅ Check-in Successful', 
-          description: `Seat ${seatId} occupied until ${new Date(expiryTimestamp).toLocaleTimeString()}.`,
-          duration: 3000,
-        });
-
-        // Redirect to dashboard after successful check-in
-        setTimeout(() => {
-          router.push('/dashboard');
-        }, 2000);
-
-      } else {
-        updates[`${seatRefPath}/status`] = 'available';
-        updates[`${seatRefPath}/bookedBy`] = null;
-        updates[`${seatRefPath}/bookedAt`] = null;
-        updates[`${seatRefPath}/bookingId`] = null;
-        updates[`${seatRefPath}/occupiedUntil`] = null;
-        updates[`${bookingRefPath}/status`] = 'completed';
-        updates[`${bookingRefPath}/exitTime`] = now.toISOString();
-
-        await update(ref(db), updates);
-
-        toast({ 
-          title: '✅ Check-out Successful', 
-          description: `Seat ${seatId} is now available.`,
-          duration: 3000,
-        });
-      }
-
-      // Clear last scan after 3 seconds to allow re-scanning
-      setTimeout(() => setLastScan(''), 3000);
-
-    } catch (error: any) {
-      toast({
-        variant: 'destructive',
-        title: 'Scan Error',
-        description: error.message || 'Failed to process QR code.',
-        duration: 4000,
+      const endpoint = mode === 'entry' ? '/api/scanner/check-in' : '/api/scanner/check-out';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId, userId, seatId }),
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Failed to process');
+
+      const msg = mode === 'entry'
+        ? `Seat ${seatId} — checked in until ${new Date(data.occupiedUntil).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+        : `Seat ${seatId} is now available`;
+
+      setLastResult({ ok: true, msg });
+      toast({ title: mode === 'entry' ? 'Checked In' : 'Checked Out', description: msg });
+      if (mode === 'entry') setTimeout(() => router.push('/dashboard'), 2000);
+      setTimeout(() => setLastScan(''), 3000);
+    } catch (e: any) {
+      const msg = e.message ?? 'Could not process QR code';
+      setLastResult({ ok: false, msg });
+      toast({ variant: 'destructive', title: 'Scan Error', description: msg });
       setLastScan('');
     } finally {
       setIsProcessing(false);
     }
-  }, [mode, toast, lastScan, isProcessing]);
+  }, [mode, toast, lastScan, isProcessing, router]);
 
   const startScanning = async () => {
     try {
       const scanner = new Html5Qrcode('qr-reader');
       scannerRef.current = scanner;
-
       await scanner.start(
-        { facingMode: "environment" },
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 },
-        },
-        (decodedText) => {
-          processQRCode(decodedText);
-        },
-        () => {
-          // Ignore scan failures (too noisy)
-        }
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 240, height: 240 } },
+        (text) => processQRCode(text),
+        () => {}
       );
-
       setIsScanning(true);
-    } catch (error: any) {
-      toast({
-        variant: 'destructive',
-        title: 'Camera Error',
-        description: 'Failed to start camera. Please check permissions.',
-      });
+      setLastResult(null);
+    } catch {
+      toast({ variant: 'destructive', title: 'Camera Error', description: 'Could not access camera. Check permissions.' });
     }
   };
 
   const stopScanning = async () => {
     if (scannerRef.current) {
-      try {
-        await scannerRef.current.stop();
-        scannerRef.current = null;
-        setIsScanning(false);
-        setLastScan('');
-      } catch (error) {
-        console.error("Failed to stop scanner:", error);
-      }
+      try { await scannerRef.current.stop(); } catch {}
+      scannerRef.current = null;
     }
+    setIsScanning(false);
+    setLastScan('');
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
     if (!file) return;
-
     setIsProcessing(true);
+    setLastResult(null);
     try {
-      // Create an image element
       const img = new Image();
-      const imageUrl = URL.createObjectURL(file);
-      
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = imageUrl;
-      });
-
-      // Create canvas and draw image
+      const url = URL.createObjectURL(file);
+      await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(); img.src = url; });
       const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
+      canvas.width = img.width; canvas.height = img.height;
       const ctx = canvas.getContext('2d');
-      
-      if (!ctx) {
-        throw new Error('Could not get canvas context');
-      }
-
+      if (!ctx) throw new Error('Canvas error');
       ctx.drawImage(img, 0, 0);
-      
-      // Get image data
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      
-      // Scan for QR code
-      const code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: "dontInvert",
-      });
-
-      URL.revokeObjectURL(imageUrl);
-
-      if (code) {
-        await processQRCode(code.data);
-      } else {
-        throw new Error('No QR code found in image');
-      }
-    } catch (error: any) {
-      toast({
-        variant: 'destructive',
-        title: 'Scan Error',
-        description: error.message || 'Could not read QR code from image. Please try again.',
-      });
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+      URL.revokeObjectURL(url);
+      if (!code) throw new Error('No QR code found in image');
+      await processQRCode(code.data);
+    } catch (err: any) {
+      const msg = err.message ?? 'Could not read QR code';
+      setLastResult({ ok: false, msg });
+      toast({ variant: 'destructive', title: 'Scan Error', description: msg });
     } finally {
       setIsProcessing(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   useEffect(() => {
-    return () => {
-      if (scannerRef.current) {
-        scannerRef.current.stop().catch(() => {});
-      }
-    };
+    return () => { scannerRef.current?.stop().catch(() => {}); };
   }, []);
 
   return (
-    <Card className="max-w-2xl mx-auto">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-2xl">QR Scanner</CardTitle>
-            <CardDescription>
-              Scan student QR codes for library access
-            </CardDescription>
-          </div>
-          <Badge variant={mode === 'entry' ? 'default' : 'secondary'} className="text-sm px-3 py-1">
-            {mode === 'entry' ? 'Entry Mode' : 'Exit Mode'}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Mode Selection */}
-        <div className="grid grid-cols-2 gap-3">
-          <Button
-            variant={mode === 'entry' ? 'default' : 'outline'}
-            onClick={() => setMode('entry')}
-            disabled={isScanning}
-            className="h-12"
-          >
-            <LogIn className="mr-2 h-4 w-4" />
-            Entry
-          </Button>
-          <Button
-            variant={mode === 'exit' ? 'default' : 'outline'}
-            onClick={() => setMode('exit')}
-            disabled={isScanning}
-            className="h-12"
-          >
-            <LogOut className="mr-2 h-4 w-4" />
-            Exit
-          </Button>
-        </div>
+    <div className="w-full max-w-sm mx-auto space-y-4">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">QR Scanner</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">Scan student QR codes for check-in / check-out</p>
+      </div>
 
-        {/* Scanner Area */}
-        <div className={cn(
-          "relative rounded-lg border-2 border-dashed overflow-hidden",
-          isScanning ? "border-primary bg-black" : "border-muted-foreground/25"
-        )}>
-          <div 
-            id="qr-reader" 
+      {/* Mode toggle */}
+      <div className="grid grid-cols-2 gap-2 p-1 rounded-lg bg-muted">
+        {(['entry', 'exit'] as ScanMode[]).map((m) => (
+          <button
+            key={m}
+            onClick={() => { if (!isScanning) setMode(m); }}
+            disabled={isScanning}
             className={cn(
-              "w-full",
-              !isScanning && "hidden"
+              'flex items-center justify-center gap-2 rounded-md py-2 text-sm font-medium transition-all',
+              mode === m
+                ? 'bg-background shadow-sm text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
             )}
-            style={{
-              border: 'none',
-            }}
-          ></div>
-          
-          {!isScanning && (
-            <div className="flex flex-col items-center justify-center py-16 px-4 bg-muted/30">
-              <Camera className="h-16 w-16 text-muted-foreground/50 mb-4" />
-              <p className="text-sm text-muted-foreground text-center mb-4">
-                Click the button below to start scanning
-              </p>
-            </div>
-          )}
-
-          {isProcessing && (
-            <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center">
-              <div className="flex flex-col items-center gap-2">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                <p className="text-sm font-medium">Processing...</p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Control Buttons */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Button
-            onClick={isScanning ? stopScanning : startScanning}
-            variant={isScanning ? 'destructive' : 'default'}
-            size="lg"
-            className="w-full"
-            disabled={isProcessing}
           >
-            {isScanning ? (
-              <>
-                <CameraOff className="mr-2 h-5 w-5" />
-                Stop Camera
-              </>
-            ) : (
-              <>
-                <Camera className="mr-2 h-5 w-5" />
-                Start Camera
-              </>
-            )}
-          </Button>
+            {m === 'entry' ? <LogIn className="h-4 w-4" /> : <LogOut className="h-4 w-4" />}
+            {m === 'entry' ? 'Entry' : 'Exit'}
+          </button>
+        ))}
+      </div>
 
-          <Button
-            onClick={() => fileInputRef.current?.click()}
-            variant="outline"
-            size="lg"
-            className="w-full"
-            disabled={isProcessing || isScanning}
-          >
-            <Upload className="mr-2 h-5 w-5" />
-            Upload Image
-          </Button>
+      {/* Viewfinder */}
+      <div className={cn(
+        'relative rounded-xl overflow-hidden border-2 transition-colors',
+        isScanning ? 'border-primary bg-black' : 'border-dashed border-muted-foreground/25 bg-muted/30'
+      )}>
+        <div id="qr-reader" className={cn('w-full', !isScanning && 'hidden')} style={{ border: 'none' }} />
+
+        {!isScanning && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <div className="rounded-2xl border-2 border-dashed border-muted-foreground/30 p-6 mb-3">
+              <ScanLine className="h-10 w-10 text-muted-foreground/50" />
+            </div>
+            <p className="text-sm text-muted-foreground">Start camera or upload image</p>
+          </div>
+        )}
+
+        {isProcessing && (
+          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center">
+            <div className="flex flex-col items-center gap-2">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm font-medium">Processing…</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Result banner */}
+      {lastResult && (
+        <div className={cn(
+          'flex items-start gap-2.5 rounded-lg p-3 text-sm',
+          lastResult.ok
+            ? 'bg-green-500/10 border border-green-500/20 text-green-700 dark:text-green-400'
+            : 'bg-destructive/10 border border-destructive/20 text-destructive'
+        )}>
+          <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>{lastResult.msg}</span>
         </div>
+      )}
 
-        {/* Hidden file input */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          onChange={handleFileUpload}
-          className="hidden"
-        />
+      {/* Action buttons */}
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          onClick={isScanning ? stopScanning : startScanning}
+          variant={isScanning ? 'destructive' : 'default'}
+          disabled={isProcessing}
+          className="gap-2"
+        >
+          {isScanning
+            ? <><CameraOff className="h-4 w-4" /> Stop</>
+            : <><Camera className="h-4 w-4" /> Camera</>}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isProcessing || isScanning}
+          className="gap-2"
+        >
+          <Upload className="h-4 w-4" /> Upload
+        </Button>
+      </div>
 
-        {/* Instructions */}
-        <div className="bg-muted/50 rounded-lg p-4 text-sm space-y-2">
-          <p className="font-medium">Instructions:</p>
-          <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-            <li>Select Entry or Exit mode</li>
-            <li>Use camera to scan live OR upload QR image</li>
-            <li>Wait for automatic processing</li>
-            <li>Check the notification for status</li>
-          </ol>
-        </div>
-      </CardContent>
-    </Card>
+      <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+
+      {/* Mode hint */}
+      <p className="text-xs text-center text-muted-foreground">
+        {mode === 'entry' ? 'Entry mode — student checking in' : 'Exit mode — student checking out'}
+      </p>
+    </div>
   );
 }

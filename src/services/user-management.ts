@@ -1,229 +1,130 @@
-import { ref, get, update } from 'firebase/database';
-import { db } from '@/lib/firebase';
-import type { UserProfile, Booking, UserStatistics } from '@/types';
+import { GetCommand, UpdateCommand, ScanCommand, QueryCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { docClient, TABLES } from "@/lib/aws";
+import type { UserProfile, Booking, UserStatistics } from "@/types";
 
-/**
- * User Management Service
- * Provides functions for user profile management, statistics, and restrictions
- */
-
-/**
- * Get user profile with stats
- */
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
   try {
-    const userRef = ref(db, `users/${userId}`);
-    const snapshot = await get(userRef);
-
-    if (!snapshot.exists()) {
-      return null;
-    }
-
-    return snapshot.val() as UserProfile;
-  } catch (error) {
-    console.error('Error fetching user profile:', error);
+    const { Item } = await docClient.send(
+      new GetCommand({ TableName: TABLES.USERS, Key: { userId } })
+    );
+    return (Item as UserProfile) ?? null;
+  } catch {
     return null;
   }
 }
 
-/**
- * Get user booking history
- */
-export async function getUserBookingHistory(
-  userId: string,
-  limit?: number
-): Promise<Booking[]> {
+export async function getUserBookingHistory(userId: string, limit?: number): Promise<Booking[]> {
   try {
-    // Bookings are stored at bookings/{userId}
-    const bookingsRef = ref(db, `bookings/${userId}`);
-    const snapshot = await get(bookingsRef);
+    const { Items = [] } = await docClient.send(
+      new QueryCommand({
+        TableName: TABLES.BOOKINGS,
+        KeyConditionExpression: "userId = :uid",
+        ExpressionAttributeValues: { ":uid": userId },
+        ScanIndexForward: false,
+      })
+    );
 
-    if (!snapshot.exists()) {
-      return [];
-    }
+    const bookings = (Items as Booking[]).sort(
+      (a, b) => new Date(b.bookingTime).getTime() - new Date(a.bookingTime).getTime()
+    );
 
-    const bookings: Booking[] = [];
-    snapshot.forEach((child) => {
-      const booking = child.val() as Booking;
-      bookings.push({
-        ...booking,
-        id: child.key!,
-      });
-    });
-
-    // Sort by booking time (most recent first)
-    bookings.sort((a, b) => {
-      return new Date(b.bookingTime).getTime() - new Date(a.bookingTime).getTime();
-    });
-
-    // Apply limit if specified
-    if (limit && limit > 0) {
-      return bookings.slice(0, limit);
-    }
-
-    return bookings;
-  } catch (error) {
-    console.error('Error fetching user booking history:', error);
+    return limit ? bookings.slice(0, limit) : bookings;
+  } catch {
     return [];
   }
 }
 
-/**
- * Flag a user (restrict booking privileges)
- */
-export async function flagUser(
-  userId: string,
-  reason: string,
-  adminId: string
-): Promise<void> {
-  try {
-    const userRef = ref(db, `users/${userId}`);
-    const snapshot = await get(userRef);
+export async function flagUser(userId: string, reason: string, adminId: string): Promise<void> {
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: TABLES.USERS, Key: { userId } })
+  );
+  if (!Item) throw new Error("User not found");
 
-    if (!snapshot.exists()) {
-      throw new Error('User not found');
-    }
-
-    await update(userRef, {
-      restrictions: {
-        isFlagged: true,
-        reason,
-        flaggedBy: adminId,
-        flaggedAt: new Date().toISOString(),
+  await docClient.send(
+    new UpdateCommand({
+      TableName: TABLES.USERS,
+      Key: { userId },
+      UpdateExpression: "SET restrictions = :r, updatedAt = :now",
+      ExpressionAttributeValues: {
+        ":r": { isFlagged: true, reason, flaggedBy: adminId, flaggedAt: new Date().toISOString() },
+        ":now": new Date().toISOString(),
       },
-      updatedAt: new Date().toISOString(),
-    });
+    })
+  );
 
-    // Log the action
-    await logAdminAction(adminId, 'flag_user', userId, 'user', reason);
-  } catch (error) {
-    console.error('Error flagging user:', error);
-    throw error;
-  }
+  await logAdminAction(adminId, "flag_user", userId, "user", reason);
 }
 
-/**
- * Remove flag from user (restore booking privileges)
- */
 export async function unflagUser(userId: string, adminId: string): Promise<void> {
-  try {
-    const userRef = ref(db, `users/${userId}`);
-    const snapshot = await get(userRef);
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: TABLES.USERS, Key: { userId } })
+  );
+  if (!Item) throw new Error("User not found");
 
-    if (!snapshot.exists()) {
-      throw new Error('User not found');
-    }
-
-    await update(userRef, {
-      restrictions: {
-        isFlagged: false,
+  await docClient.send(
+    new UpdateCommand({
+      TableName: TABLES.USERS,
+      Key: { userId },
+      UpdateExpression: "SET restrictions = :r, updatedAt = :now",
+      ExpressionAttributeValues: {
+        ":r": { isFlagged: false },
+        ":now": new Date().toISOString(),
       },
-      updatedAt: new Date().toISOString(),
-    });
+    })
+  );
 
-    // Log the action
-    await logAdminAction(adminId, 'unflag_user', userId, 'user', 'Restrictions removed');
-  } catch (error) {
-    console.error('Error unflagging user:', error);
-    throw error;
-  }
+  await logAdminAction(adminId, "unflag_user", userId, "user", "Restrictions removed");
 }
 
-/**
- * Search users by email or name
- */
 export async function searchUsers(query: string): Promise<UserProfile[]> {
   try {
-    const usersRef = ref(db, 'users');
-    const snapshot = await get(usersRef);
-
-    if (!snapshot.exists()) {
-      return [];
-    }
-
-    const users: UserProfile[] = [];
-    const searchLower = query.toLowerCase().trim();
-
-    snapshot.forEach((child) => {
-      const user = child.val() as UserProfile;
-      const matchesEmail = user.email.toLowerCase().includes(searchLower);
-      const matchesName = user.displayName?.toLowerCase().includes(searchLower);
-
-      if (matchesEmail || matchesName) {
-        users.push(user);
-      }
-    });
-
-    return users;
-  } catch (error) {
-    console.error('Error searching users:', error);
+    const { Items = [] } = await docClient.send(new ScanCommand({ TableName: TABLES.USERS }));
+    const lower = query.toLowerCase().trim();
+    return (Items as UserProfile[]).filter(
+      (u) =>
+        (u as any).role !== "admin" &&
+        (u.email.toLowerCase().includes(lower) ||
+          u.displayName?.toLowerCase().includes(lower))
+    );
+  } catch {
     return [];
   }
 }
 
-/**
- * Get user statistics
- */
 export async function getUserStatistics(userId: string): Promise<UserStatistics> {
   try {
     const bookings = await getUserBookingHistory(userId);
+    const completed = bookings.filter((b) => b.status === "completed" && b.entryTime);
 
-    // Filter completed bookings with check-in
-    const completedBookings = bookings.filter(
-      (b) => b.status === 'completed' && b.entryTime
-    );
-
-    // Calculate total hours booked
-    const totalHoursBooked = completedBookings.reduce((sum, booking) => {
-      const start = new Date(booking.entryTime!);
-      const end = new Date(booking.exitTime || booking.endTime);
-      const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-      return sum + Math.max(0, hours);
+    const totalHoursBooked = completed.reduce((sum, b) => {
+      const start = new Date(b.entryTime!);
+      const end = new Date(b.exitTime ?? b.endTime);
+      return sum + Math.max(0, (end.getTime() - start.getTime()) / 3_600_000);
     }, 0);
 
-    // Calculate average session duration
-    const averageSessionDuration =
-      completedBookings.length > 0
-        ? totalHoursBooked / completedBookings.length
-        : 0;
-
-    // Count no-shows and overstays
-    const noShowCount = bookings.filter((b) => b.status === 'no-show').length;
+    const averageSessionDuration = completed.length ? totalHoursBooked / completed.length : 0;
+    const noShowCount = bookings.filter((b) => b.status === "no-show").length;
     const overstayCount = bookings.filter((b) => {
-      if (b.status !== 'completed' || !b.exitTime) return false;
-      const exitTime = new Date(b.exitTime);
-      const endTime = new Date(b.endTime);
-      return exitTime > endTime;
+      if (b.status !== "completed" || !b.exitTime) return false;
+      return new Date(b.exitTime) > new Date(b.endTime);
     }).length;
 
-    // Find most booked seats
     const seatCounts: Record<string, number> = {};
-    completedBookings.forEach((booking) => {
-      seatCounts[booking.seatId] = (seatCounts[booking.seatId] || 0) + 1;
-    });
-
+    completed.forEach((b) => { seatCounts[b.seatId] = (seatCounts[b.seatId] ?? 0) + 1; });
     const mostBookedSeats = Object.entries(seatCounts)
       .map(([seatId, count]) => ({ seatId, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
 
-    // Find preferred time slots
     const hourCounts: Record<number, number> = {};
-    completedBookings.forEach((booking) => {
-      const hour = new Date(booking.startTime).getHours();
-      hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+    completed.forEach((b) => {
+      const h = new Date(b.startTime).getHours();
+      hourCounts[h] = (hourCounts[h] ?? 0) + 1;
     });
-
     const preferredTimeSlots = Object.entries(hourCounts)
-      .map(([hour, count]) => ({ hour: parseInt(hour), count }))
+      .map(([h, count]) => ({ hour: +h, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
-
-    // Calculate weekly usage
-    const weeklyUsage = calculateWeeklyUsage(completedBookings);
-
-    // Calculate monthly usage
-    const monthlyUsage = calculateMonthlyUsage(completedBookings);
 
     return {
       totalBookings: bookings.length,
@@ -233,11 +134,10 @@ export async function getUserStatistics(userId: string): Promise<UserStatistics>
       overstayCount,
       mostBookedSeats,
       preferredTimeSlots,
-      weeklyUsage,
-      monthlyUsage,
+      weeklyUsage: calcWeekly(completed),
+      monthlyUsage: calcMonthly(completed),
     };
-  } catch (error) {
-    console.error('Error calculating user statistics:', error);
+  } catch {
     return {
       totalBookings: 0,
       totalHoursBooked: 0,
@@ -252,102 +152,49 @@ export async function getUserStatistics(userId: string): Promise<UserStatistics>
   }
 }
 
-/**
- * Calculate weekly usage
- */
-function calculateWeeklyUsage(
-  bookings: Booking[]
-): Array<{ week: string; hours: number }> {
-  const weeklyData: Record<string, number> = {};
-
-  bookings.forEach((booking) => {
-    if (!booking.entryTime) return;
-
-    const start = new Date(booking.entryTime);
-    const end = new Date(booking.exitTime || booking.endTime);
-    const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-
-    // Get week identifier (ISO week)
-    const weekStart = getWeekStart(start);
-    const weekKey = weekStart.toISOString().split('T')[0];
-
-    weeklyData[weekKey] = (weeklyData[weekKey] || 0) + Math.max(0, hours);
+function calcWeekly(bookings: Booking[]): Array<{ week: string; hours: number }> {
+  const data: Record<string, number> = {};
+  bookings.forEach((b) => {
+    if (!b.entryTime) return;
+    const hrs = (new Date(b.exitTime ?? b.endTime).getTime() - new Date(b.entryTime).getTime()) / 3_600_000;
+    const d = new Date(b.entryTime);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    const key = new Date(d.setDate(diff)).toISOString().split("T")[0];
+    data[key] = (data[key] ?? 0) + Math.max(0, hrs);
   });
-
-  return Object.entries(weeklyData)
-    .map(([week, hours]) => ({ week, hours }))
-    .sort((a, b) => a.week.localeCompare(b.week))
-    .slice(-12); // Last 12 weeks
+  return Object.entries(data).map(([week, hours]) => ({ week, hours }))
+    .sort((a, b) => a.week.localeCompare(b.week)).slice(-12);
 }
 
-/**
- * Calculate monthly usage
- */
-function calculateMonthlyUsage(
-  bookings: Booking[]
-): Array<{ month: string; hours: number }> {
-  const monthlyData: Record<string, number> = {};
-
-  bookings.forEach((booking) => {
-    if (!booking.entryTime) return;
-
-    const start = new Date(booking.entryTime);
-    const end = new Date(booking.exitTime || booking.endTime);
-    const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-
-    // Get month identifier (YYYY-MM)
-    const monthKey = start.toISOString().substring(0, 7);
-
-    monthlyData[monthKey] = (monthlyData[monthKey] || 0) + Math.max(0, hours);
+function calcMonthly(bookings: Booking[]): Array<{ month: string; hours: number }> {
+  const data: Record<string, number> = {};
+  bookings.forEach((b) => {
+    if (!b.entryTime) return;
+    const hrs = (new Date(b.exitTime ?? b.endTime).getTime() - new Date(b.entryTime).getTime()) / 3_600_000;
+    const key = new Date(b.entryTime).toISOString().substring(0, 7);
+    data[key] = (data[key] ?? 0) + Math.max(0, hrs);
   });
-
-  return Object.entries(monthlyData)
-    .map(([month, hours]) => ({ month, hours }))
-    .sort((a, b) => a.month.localeCompare(b.month))
-    .slice(-12); // Last 12 months
+  return Object.entries(data).map(([month, hours]) => ({ month, hours }))
+    .sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
 }
 
-/**
- * Get the start of the week (Monday) for a given date
- */
-function getWeekStart(date: Date): Date {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
-  return new Date(d.setDate(diff));
-}
-
-/**
- * Log admin action to audit log
- */
 async function logAdminAction(
   adminId: string,
   action: string,
   targetId: string,
-  targetType: 'booking' | 'user' | 'seat' | 'settings',
-  reason?: string,
-  details?: Record<string, any>
+  targetType: "booking" | "user" | "seat" | "settings",
+  reason?: string
 ): Promise<void> {
   try {
-    const { push, set } = await import('firebase/database');
-    const auditLogsRef = ref(db, 'auditLogs');
-    const newLogRef = push(auditLogsRef);
-
-    const log = {
-      id: newLogRef.key,
-      timestamp: new Date().toISOString(),
-      adminId,
-      adminName: 'Admin', // TODO: Get actual admin name
-      action,
-      targetId,
-      targetType,
-      reason,
-      details,
-    };
-
-    await set(newLogRef, log);
-  } catch (error) {
-    console.error('Error logging admin action:', error);
-    // Don't throw - logging failure shouldn't block the main operation
+    const logId = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await docClient.send(
+      new PutCommand({
+        TableName: TABLES.AUDIT_LOGS,
+        Item: { logId, timestamp: new Date().toISOString(), adminId, action, targetId, targetType, reason },
+      })
+    );
+  } catch {
+    // Non-fatal
   }
 }

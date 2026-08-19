@@ -13,24 +13,20 @@ export default function FeedbackPage() {
   };
 
   return (
-    <div className="w-full max-w-7xl mx-auto space-y-6 animate-in fade-in-50 duration-500">
-      <div className="text-center sm:text-left">
-        <h1 className="text-3xl md:text-4xl font-bold font-headline">Feedback & Support</h1>
-        <p className="text-muted-foreground mt-2">
-          Submit feedback, report issues, or view your ticket history
-        </p>
+    <div className="w-full max-w-2xl mx-auto space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Feedback & Support</h1>
+        <p className="text-muted-foreground text-sm mt-0.5">Report issues or request features — we read every ticket</p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full max-w-md mx-auto grid-cols-2">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="submit">Submit Feedback</TabsTrigger>
           <TabsTrigger value="history">My Tickets</TabsTrigger>
         </TabsList>
 
         <TabsContent value="submit" className="mt-6">
-          <div className="max-w-2xl mx-auto">
-            <FeedbackForm onSubmitSuccess={handleSubmitSuccess} />
-          </div>
+          <FeedbackForm onSubmitSuccess={handleSubmitSuccess} />
         </TabsContent>
 
         <TabsContent value="history" className="mt-6">

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/providers/auth-provider';
 import Link from 'next/link';
@@ -14,60 +14,26 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  LayoutGrid,
-  LogOut,
-  QrCode,
-  User,
-  Loader2,
-} from 'lucide-react';
+import { LayoutGrid, LogOut, QrCode, User, Loader2, BarChart3, MessageSquare, Github } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { cn } from '@/lib/utils';
 
-import { getAdminEmails } from '@/lib/admin-config';
-
-// Admin email whitelist - loaded from environment
-const ADMIN_EMAILS = getAdminEmails();
-
-export default function MainLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function MainLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const [isRedirecting, setIsRedirecting] = React.useState(false);
 
-  // Check if user is admin - memoized to avoid recalculation
-  const isAdmin = useMemo(() => {
-    return user?.email ? ADMIN_EMAILS.includes(user.email) : false;
-  }, [user?.email]);
+  const isAdmin = user?.isAdmin ?? false;
+  const isAdminRoute = pathname.startsWith('/admin');
 
   useEffect(() => {
-    if (!loading && !user) {
-      setIsRedirecting(true);
-      router.replace('/');
-    }
+    if (!loading && !user) router.replace('/');
   }, [user, loading, router]);
 
-  // Redirect admins to admin dashboard immediately (no 404 shown)
   useEffect(() => {
-    if (isAdmin && !pathname.startsWith('/admin')) {
-      router.replace('/admin/analytics');
-    }
-  }, [isAdmin, pathname, router]);
+    if (!loading && user && isAdmin && !isAdminRoute) router.replace('/admin/analytics');
+  }, [loading, user, isAdmin, isAdminRoute, router]);
 
-  // Show nothing while redirecting (prevents flash of user pages)
-  if (isAdmin && !pathname.startsWith('/admin')) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center">
-        <Loader2 className="h-10 w-10 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  // Show loading only while auth is initializing
   if (loading) {
     return (
       <div className="flex h-screen w-full items-center justify-center">
@@ -76,8 +42,7 @@ export default function MainLayout({
     );
   }
 
-  // If no user and not loading, redirect is happening
-  if (!user || isRedirecting) {
+  if (!user) {
     return (
       <div className="flex h-screen w-full items-center justify-center">
         <Loader2 className="h-10 w-10 animate-spin text-primary" />
@@ -85,176 +50,160 @@ export default function MainLayout({
     );
   }
 
-  const getInitials = (email: string | null) => {
-    if (!email) return 'U';
-    return email.charAt(0).toUpperCase();
-  };
+  if (isAdmin && !isAdminRoute) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center">
+        <Loader2 className="h-10 w-10 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  // Admin on admin route — admin layout handles its own chrome
+  if (isAdmin && isAdminRoute) return <>{children}</>;
 
   const navItems = [
-    { href: '/seats', label: 'Seats', icon: LayoutGrid },
+    { href: '/seats',     label: 'Seats',    icon: LayoutGrid },
     { href: '/dashboard', label: 'Dashboard', icon: User },
-    { href: '/scanner', label: 'Scanner', icon: QrCode },
+    { href: '/scanner',   label: 'Scanner',   icon: QrCode },
   ];
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Top Navigation */}
+    <div className="min-h-screen flex flex-col bg-background">
+      {/* Nav */}
       <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="w-full max-w-7xl mx-auto flex h-16 items-center justify-between px-4">
-          {/* Logo */}
+        <div className="w-full max-w-6xl mx-auto flex h-14 items-center justify-between px-4">
           <Link href="/seats" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-            <Image 
-              src="/images/logo.png"
-              width={36}
-              height={36}
-              alt="SeatFinderSRM"
-              className="rounded-full"
-            />
-            <span className="font-headline text-lg sm:text-xl font-bold hidden sm:inline-block">SeatFinderSRM</span>
+            <Image src="/images/logo.png" width={32} height={32} alt="SeatFinderSRM" className="rounded-full" />
+            <span className="font-bold text-base hidden sm:inline-block tracking-tight">SeatFinderSRM</span>
           </Link>
 
-          {/* Desktop Navigation - Hidden for admins */}
-          {!isAdmin && (
-            <nav className="hidden md:flex items-center gap-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = pathname === item.href;
-                return (
-                  <Link key={item.href} href={item.href}>
-                    <Button 
-                      variant={isActive ? "default" : "ghost"}
-                      size="sm"
-                      className={cn("gap-2", isActive && "shadow-sm")}
-                    >
-                      <Icon className="h-4 w-4" />
-                      {item.label}
-                    </Button>
-                  </Link>
-                );
-              })}
-            </nav>
-          )}
+          <nav className="hidden md:flex items-center gap-0.5">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.href;
+              return (
+                <Link key={item.href} href={item.href}>
+                  <Button
+                    variant={isActive ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className={cn('gap-2 h-8', isActive && 'font-medium')}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {item.label}
+                  </Button>
+                </Link>
+              );
+            })}
+          </nav>
 
-          {/* Right Side Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <ThemeToggle />
-            
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="rounded-full">
-                  <div className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold text-sm">
-                    {getInitials(user.email)}
+                <Button variant="ghost" size="icon" className="rounded-full h-8 w-8">
+                  <div className="h-7 w-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold text-xs">
+                    {(user.email ?? 'U').charAt(0).toUpperCase()}
                   </div>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>
-                  <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium leading-none">{isAdmin ? 'Admin' : 'SRM Student'}</p>
-                    <p className="text-xs leading-none text-muted-foreground truncate">
-                      {user.email}
-                    </p>
-                  </div>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel className="pb-1.5">
+                  <p className="text-sm font-medium leading-none truncate">{user.email?.split('@')[0]}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 truncate">{user.email}</p>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {!isAdmin && (
-                  <>
-                    <DropdownMenuItem asChild>
-                      <Link href="/statistics" className="cursor-pointer">
-                        <LayoutGrid className="mr-2 h-4 w-4" />
-                        <span>Usage Statistics</span>
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild>
-                      <Link href="/feedback" className="cursor-pointer">
-                        <User className="mr-2 h-4 w-4" />
-                        <span>Feedback & Support</span>
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem onClick={logout} className="text-destructive focus:text-destructive">
-                  <LogOut className="mr-2 h-4 w-4" />
-                  <span>Log out</span>
+                <DropdownMenuItem asChild>
+                  <Link href="/statistics" className="cursor-pointer gap-2">
+                    <BarChart3 className="h-3.5 w-3.5" /> My Statistics
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/feedback" className="cursor-pointer gap-2">
+                    <MessageSquare className="h-3.5 w-3.5" /> Feedback
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={logout} className="text-destructive focus:text-destructive gap-2">
+                  <LogOut className="h-3.5 w-3.5" /> Sign out
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </div>
 
-        {/* Mobile Navigation - Hidden for admins */}
-        {!isAdmin && (
-          <div className="md:hidden border-t">
-            <div className="w-full max-w-7xl mx-auto">
-              <nav className="flex items-center justify-around px-2 py-2">
-                {navItems.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = pathname === item.href;
-                  return (
-                    <Link key={item.href} href={item.href} className="flex-1">
-                      <Button 
-                        variant={isActive ? "default" : "ghost"}
-                        size="sm"
-                        className={cn("w-full gap-1.5", isActive && "shadow-sm")}
-                      >
-                        <Icon className="h-4 w-4" />
-                        <span className="text-xs">{item.label}</span>
-                      </Button>
-                    </Link>
-                  );
-                })}
-              </nav>
-            </div>
-          </div>
-        )}
+        {/* Mobile bottom nav */}
+        <div className="md:hidden border-t bg-background">
+          <nav className="flex items-center px-2 py-1.5 max-w-6xl mx-auto">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.href;
+              return (
+                <Link key={item.href} href={item.href} className="flex-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={cn('w-full gap-1.5 h-9 rounded-lg', isActive && 'bg-secondary font-medium')}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span className="text-xs">{item.label}</span>
+                  </Button>
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
       </header>
 
-      {/* Main Content */}
       <main className="flex-1 w-full">
-        <div className="container max-w-7xl mx-auto py-6 px-4">
+        <div className="max-w-6xl mx-auto py-6 px-4">
           {children}
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="border-t py-6 md:py-8 bg-muted/30">
-        <div className="w-full max-w-7xl mx-auto px-4">
-          <div className="flex flex-col items-center gap-4 text-center">
-            <div className="flex items-center gap-2">
-              <Image 
-                src="/images/logo.png"
-                width={24}
-                height={24}
-                alt="SeatFinderSRM"
-                className="rounded-full"
-              />
-              <span className="font-headline font-semibold">SeatFinderSRM</span>
+      <footer className="border-t bg-muted/20">
+        <div className="max-w-6xl mx-auto px-4 py-8">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+            {/* Brand */}
+            <div className="flex items-center gap-2.5">
+              <Image src="/images/logo.png" width={28} height={28} alt="SeatFinderSRM" className="rounded-full" />
+              <div>
+                <p className="font-semibold text-sm">SeatFinderSRM</p>
+                <p className="text-xs text-muted-foreground">Library Seat Booking</p>
+              </div>
             </div>
-            
-            <div className="text-sm text-muted-foreground space-y-2">
-              <p>Developed under Department of Computing Technologies</p>
-              <p>© {new Date().getFullYear()} SRM Institute of Science and Technology. All rights reserved.</p>
-            </div>
-            
-            <div className="text-xs text-muted-foreground">
-              <p>
-                Made with{' '}
-                <span className="text-red-500">❤</span>
-                {' '}by{' '}
-                <a href="https://github.com/nidhi-nayana" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">
-                  Nidhi
-                </a>
-                ,{' '}
-                <a href="https://github.com/tanisheesh" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">
-                  Tanish
-                </a>
-                {' '}and{' '}
-                <a href="https://github.com/nishant-codess" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">
-                  Nishant
-                </a>
+
+            {/* Links */}
+            <nav className="flex gap-4 text-sm">
+              <Link href="/seats" className="text-muted-foreground hover:text-foreground transition-colors">Seats</Link>
+              <Link href="/dashboard" className="text-muted-foreground hover:text-foreground transition-colors">Dashboard</Link>
+              <Link href="/feedback" className="text-muted-foreground hover:text-foreground transition-colors">Feedback</Link>
+              <Link href="/statistics" className="text-muted-foreground hover:text-foreground transition-colors">Statistics</Link>
+            </nav>
+
+            {/* Credits */}
+            <div className="text-xs text-muted-foreground space-y-1">
+              <p>Department of Computing Technologies, SRMIST</p>
+              <p className="flex items-center gap-1 flex-wrap">
+                Built by{' '}
+                <a href="https://github.com/nidhi-nayana" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors font-medium">Nidhi</a>,{' '}
+                <a href="https://github.com/tanisheesh" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors font-medium">Tanish</a>{' '}
+                &amp;{' '}
+                <a href="https://github.com/nishant-codess" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors font-medium">Nishant</a>
               </p>
             </div>
+          </div>
+
+          <div className="mt-6 pt-4 border-t flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
+            <p>© {new Date().getFullYear()} SRM Institute of Science and Technology</p>
+            <a
+              href="https://github.com/tanisheesh"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 hover:text-foreground transition-colors"
+            >
+              <Github className="h-3.5 w-3.5" /> GitHub
+            </a>
           </div>
         </div>
       </footer>

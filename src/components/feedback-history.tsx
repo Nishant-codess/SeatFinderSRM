@@ -2,233 +2,140 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import { MessageSquare, Clock } from 'lucide-react';
+import { MessageSquare, Clock, ChevronDown, ChevronUp, CheckCircle } from 'lucide-react';
 import { useAuth } from '@/components/providers/auth-provider';
-import { ref, query, orderByChild, equalTo, onValue, off } from 'firebase/database';
-import { db } from '@/lib/firebase';
+import { cn } from '@/lib/utils';
 import type { FeedbackTicket, FeedbackStatus } from '@/types';
+
+const STATUS_STYLES: Record<FeedbackStatus | string, { label: string; class: string }> = {
+  open:        { label: 'Open',        class: 'text-red-600 dark:text-red-400 bg-red-500/10' },
+  pending:     { label: 'Pending',     class: 'text-yellow-600 dark:text-yellow-400 bg-yellow-500/10' },
+  'in-progress':{ label: 'In Progress', class: 'text-blue-600 dark:text-blue-400 bg-blue-500/10' },
+  resolved:    { label: 'Resolved',    class: 'text-green-600 dark:text-green-400 bg-green-500/10' },
+  closed:      { label: 'Closed',      class: 'text-muted-foreground bg-muted' },
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  bug: 'Bug', 'feature-request': 'Feature', 'seat-issue': 'Seat Issue', general: 'General',
+};
+
+function TicketRow({ ticket }: { ticket: FeedbackTicket }) {
+  const [expanded, setExpanded] = useState(false);
+  const style = STATUS_STYLES[ticket.status] ?? STATUS_STYLES.open;
+
+  return (
+    <div className="rounded-lg border overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-start gap-3 hover:bg-muted/30 transition-colors text-left"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full capitalize', style.class)}>
+              {style.label}
+            </span>
+            <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+              {CATEGORY_LABELS[ticket.category] ?? ticket.category}
+            </span>
+            {(ticket.responses?.length ?? 0) > 0 && (
+              <span className="text-xs text-primary font-medium">
+                {ticket.responses!.length} reply
+              </span>
+            )}
+          </div>
+          <p className="text-sm font-medium mt-1">{ticket.subject}</p>
+          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            {new Date(ticket.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+          </p>
+        </div>
+        {expanded
+          ? <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0 mt-1" />
+          : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0 mt-1" />}
+      </button>
+
+      {expanded && (
+        <div className="border-t px-4 py-4 space-y-3 bg-muted/10">
+          <p className="text-sm text-muted-foreground">{ticket.description}</p>
+
+          {ticket.responses && ticket.responses.length > 0 && (
+            <div className="space-y-2 pt-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Responses</p>
+              {ticket.responses.map((r: any, i: number) => (
+                <div
+                  key={i}
+                  className={cn(
+                    'rounded-lg p-3 text-sm',
+                    r.isAdmin ? 'bg-primary/8 border border-primary/15 ml-4' : 'bg-muted/50'
+                  )}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium">{r.isAdmin ? 'Support' : 'You'}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(r.respondedAt || r.timestamp || Date.now()).toLocaleString('en-IN', {
+                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  <p>{r.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function FeedbackHistory() {
   const { user } = useAuth();
   const [tickets, setTickets] = useState<FeedbackTicket[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedTicket, setSelectedTicket] = useState<FeedbackTicket | null>(null);
 
   useEffect(() => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-
-    // Read feedback directly from Firebase (client-side)
-    const feedbackRef = ref(db, 'feedback');
-    const userFeedbackQuery = query(
-      feedbackRef,
-      orderByChild('userId'),
-      equalTo(user.uid)
-    );
-
-    const listener = onValue(userFeedbackQuery, (snapshot) => {
-      if (snapshot.exists()) {
-        const feedbackData: FeedbackTicket[] = [];
-        snapshot.forEach((child) => {
-          feedbackData.push({
-            ...child.val(),
-            id: child.key!,
-          });
-        });
-        
-        // Sort by creation date (newest first)
-        feedbackData.sort((a, b) => 
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
-        
-        setTickets(feedbackData);
-      } else {
-        setTickets([]);
-      }
-      setLoading(false);
-    }, (error) => {
-      console.error('Error fetching feedback:', error);
-      setTickets([]);
-      setLoading(false);
-    });
-
-    return () => off(userFeedbackQuery, 'value', listener);
+    if (!user) { setLoading(false); return; }
+    fetch(`/api/feedback/user/${user.uid}`, {
+      headers: { Authorization: `Bearer ${user.accessToken}` },
+    })
+      .then((r) => r.json())
+      .then((data) => setTickets(data.tickets ?? []))
+      .catch(() => setTickets([]))
+      .finally(() => setLoading(false));
   }, [user]);
-
-  const getStatusColor = (status: FeedbackStatus) => {
-    switch (status) {
-      case 'pending':
-        return 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20';
-      case 'in-progress':
-        return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20';
-      case 'resolved':
-        return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20';
-      case 'closed':
-        return 'bg-gray-500/10 text-gray-700 dark:text-gray-400 border-gray-500/20';
-      default:
-        return '';
-    }
-  };
-
-  const getCategoryLabel = (category: string) => {
-    const labels: Record<string, string> = {
-      'bug': 'Bug Report',
-      'feature-request': 'Feature Request',
-      'seat-issue': 'Seat Issue',
-      'general': 'General',
-    };
-    return labels[category] || category;
-  };
 
   if (loading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Feedback History</CardTitle>
-          <CardDescription>Loading your submitted tickets...</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-24 w-full" />
-          ))}
-        </CardContent>
-      </Card>
+      <div className="space-y-3">
+        {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
+      </div>
     );
   }
 
   if (tickets.length === 0) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Feedback History</CardTitle>
-          <CardDescription>You haven't submitted any feedback yet</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="text-center py-8 text-muted-foreground">
-            <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p>No feedback tickets found</p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="flex flex-col items-center justify-center py-12 text-center rounded-lg border border-dashed">
+        <MessageSquare className="h-10 w-10 text-muted-foreground/30 mb-3" />
+        <p className="font-medium text-muted-foreground">No tickets yet</p>
+        <p className="text-sm text-muted-foreground/70 mt-1">Submit feedback above to get started</p>
+      </div>
     );
   }
 
+  const resolved = tickets.filter((t) => t.status === 'resolved' || t.status === 'closed').length;
+
   return (
-    <div className="grid gap-6 md:grid-cols-2">
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Feedback History</CardTitle>
-          <CardDescription>{tickets.length} ticket(s) submitted</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ScrollArea className="h-[500px] pr-4">
-            <div className="space-y-4">
-              {tickets.map((ticket) => (
-                <div
-                  key={ticket.id}
-                  className={`p-4 rounded-lg border cursor-pointer transition-colors hover:bg-accent ${
-                    selectedTicket?.id === ticket.id ? 'bg-accent' : ''
-                  }`}
-                  onClick={() => setSelectedTicket(ticket)}
-                >
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <h4 className="font-semibold line-clamp-1">{ticket.subject}</h4>
-                    <Badge variant="outline" className={getStatusColor(ticket.status)}>
-                      {ticket.status}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground line-clamp-2 mb-2">
-                    {ticket.description}
-                  </p>
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      {new Date(ticket.createdAt).toLocaleDateString()}
-                    </span>
-                    <Badge variant="secondary" className="text-xs">
-                      {getCategoryLabel(ticket.category)}
-                    </Badge>
-                    {ticket.responses && ticket.responses.length > 0 && (
-                      <span className="flex items-center gap-1">
-                        <MessageSquare className="h-3 w-3" />
-                        {ticket.responses.length} response(s)
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </ScrollArea>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Ticket Details</CardTitle>
-          <CardDescription>
-            {selectedTicket ? 'Conversation thread' : 'Select a ticket to view details'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {selectedTicket ? (
-            <ScrollArea className="h-[500px] pr-4">
-              <div className="space-y-4">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-semibold text-lg">{selectedTicket.subject}</h3>
-                    <Badge variant="outline" className={getStatusColor(selectedTicket.status)}>
-                      {selectedTicket.status}
-                    </Badge>
-                  </div>
-                  <Badge variant="secondary" className="mb-3">
-                    {getCategoryLabel(selectedTicket.category)}
-                  </Badge>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Submitted on {new Date(selectedTicket.createdAt).toLocaleString()}
-                  </p>
-                  <p className="text-sm">{selectedTicket.description}</p>
-                </div>
-
-                {selectedTicket.responses && selectedTicket.responses.length > 0 && (
-                  <>
-                    <Separator />
-                    <div className="space-y-4">
-                      <h4 className="font-semibold">Responses</h4>
-                      {selectedTicket.responses.map((response, idx) => {
-                        const resp = response as any;
-                        return (
-                        <div key={`${selectedTicket.id}-response-${idx}`} className="bg-muted p-3 rounded-lg">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="font-medium text-sm">
-                              {resp.isAdmin ? '👨‍💼 Admin' : resp.authorName || 'User'}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {new Date(resp.respondedAt || resp.timestamp || Date.now()).toLocaleString()}
-                            </span>
-                          </div>
-                          <p className="text-sm">{resp.message}</p>
-                        </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </div>
-            </ScrollArea>
-          ) : (
-            <div className="text-center py-12 text-muted-foreground">
-              <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>Select a ticket to view the conversation</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium">{tickets.length} ticket{tickets.length !== 1 ? 's' : ''}</p>
+        {resolved > 0 && (
+          <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+            <CheckCircle className="h-3 w-3" /> {resolved} resolved
+          </span>
+        )}
+      </div>
+      {tickets.map((t) => <TicketRow key={t.id} ticket={t} />)}
     </div>
   );
 }
