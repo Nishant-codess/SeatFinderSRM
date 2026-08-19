@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomInt } from "node:crypto";
 import { cognitoAdmin, docClient, TABLES } from "@/lib/aws";
 import {
   AdminCreateUserCommand,
@@ -62,8 +63,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Account error." }, { status: 500 });
   }
 
-  // Generate 6-digit OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  // Generate 6-digit OTP using CSPRNG
+  const otp = randomInt(100000, 1000000).toString();
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
   // Store OTP in DynamoDB under a special "otp#email" key (no new table needed)

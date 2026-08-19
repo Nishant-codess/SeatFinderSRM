@@ -42,7 +42,7 @@ export async function GET() {
 
     if (Items.length === 0) {
       await seedSeats();
-      return NextResponse.redirect(new URL("/api/seats", "http://localhost"));
+      return NextResponse.redirect(new URL("/api/seats", request.url));
     }
 
     // Organize by floor, auto-expire stale reservations

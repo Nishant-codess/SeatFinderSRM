@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
   // Verify the booking belongs to this user
   const active = await getActiveBookingForUser(auth.userId!);
-  if (!active || active.id !== bookingId) {
+  if (!active || active.bookingId !== bookingId) {
     return NextResponse.json({ error: "Booking not found or not yours" }, { status: 403 });
   }
 

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Html5Qrcode } from 'html5-qrcode';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/components/providers/auth-provider';
 import { Button } from '@/components/ui/button';
 import { LogIn, LogOut, Camera, CameraOff, Loader2, Upload, CheckCircle2, ScanLine } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -20,6 +21,7 @@ export function QrScanner() {
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+  const { user } = useAuth();
   const router = useRouter();
 
   const processQRCode = useCallback(async (decodedText: string) => {
@@ -36,7 +38,10 @@ export function QrScanner() {
       const endpoint = mode === 'entry' ? '/api/scanner/check-in' : '/api/scanner/check-out';
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(user?.accessToken ? { Authorization: `Bearer ${user.accessToken}` } : {}),
+        },
         body: JSON.stringify({ bookingId, userId, seatId }),
       });
       const data = await res.json();

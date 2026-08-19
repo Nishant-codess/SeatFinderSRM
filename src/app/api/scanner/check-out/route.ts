@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { docClient, TABLES } from "@/lib/aws";
 import { GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { requireUser } from "@/lib/verify-admin";
 
 export async function POST(req: NextRequest) {
+  const authErr = await requireUser(req);
+  if (authErr) return authErr;
+
   try {
     const { bookingId, userId, seatId } = await req.json();
     if (!bookingId || !userId || !seatId) {

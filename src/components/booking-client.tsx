@@ -83,7 +83,7 @@ export function BookingClient({ seatId, activeBooking }: { seatId: string; activ
       const res = await fetch('/api/bookings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${user.accessToken}` },
-        body: JSON.stringify({ seatId, endTime: endDt.toISOString(), userId: user.uid, userEmail: user.email }),
+        body: JSON.stringify({ seatId, endTime: endDt.toISOString() }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Booking failed');
       const data = await res.json();
@@ -188,6 +188,7 @@ export function BookingClient({ seatId, activeBooking }: { seatId: string; activ
   const mins = Math.floor(countdown / 60);
   const secs = Math.round(countdown % 60).toString().padStart(2, '0');
   const isUrgent = countdown > 0 && countdown <= 60;
+  const isOverdue = countdown === 0 && booking?.status === 'pending';
 
   return (
     <div className="w-full max-w-md mx-auto space-y-4">
@@ -231,10 +232,19 @@ export function BookingClient({ seatId, activeBooking }: { seatId: string; activ
               <p className="text-xl font-bold font-mono">Seat {seatId}</p>
             </div>
             <div className="text-right">
-              <p className="text-xs text-muted-foreground">Check in within</p>
-              <p className={`text-2xl font-mono font-bold ${isUrgent ? 'text-destructive' : ''}`}>
-                {mins}:{secs}
-              </p>
+              {isOverdue ? (
+                <>
+                  <p className="text-xs text-destructive font-medium">Window expired</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Cancel and rebook</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">Check in within</p>
+                  <p className={`text-2xl font-mono font-bold ${isUrgent ? 'text-destructive' : ''}`}>
+                    {mins}:{secs}
+                  </p>
+                </>
+              )}
             </div>
           </div>
 
@@ -261,13 +271,14 @@ export function BookingClient({ seatId, activeBooking }: { seatId: string; activ
           </div>
 
           <Button
-            variant="ghost"
+            variant={isOverdue ? 'destructive' : 'ghost'}
             size="sm"
-            className="w-full text-destructive hover:text-destructive hover:bg-destructive/10"
+            className={isOverdue ? 'w-full' : 'w-full text-destructive hover:text-destructive hover:bg-destructive/10'}
             onClick={handleCancel}
             disabled={loading}
           >
-            Cancel booking
+            {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            {isOverdue ? 'Cancel & free seat' : 'Cancel booking'}
           </Button>
         </div>
       )}

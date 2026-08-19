@@ -67,9 +67,9 @@ export async function getActiveBookingForUser(userId: string): Promise<Booking |
       new QueryCommand({
         TableName: TABLES.BOOKINGS,
         KeyConditionExpression: "userId = :uid",
-        FilterExpression: "#s = :active",
+        FilterExpression: "#s IN (:active, :pending)",
         ExpressionAttributeNames: { "#s": "status" },
-        ExpressionAttributeValues: { ":uid": userId, ":active": "active" },
+        ExpressionAttributeValues: { ":uid": userId, ":active": "active", ":pending": "pending" },
       })
     );
     return (Items[0] as Booking) ?? null;
@@ -86,6 +86,12 @@ export async function cancelBooking(
   reason: string
 ): Promise<void> {
   try {
+    // Fetch booking first to confirm it exists and get seatId
+    const { Item } = await docClient.send(
+      new GetCommand({ TableName: TABLES.BOOKINGS, Key: { userId, bookingId } })
+    );
+    if (!Item) throw new Error("Booking not found");
+
     await docClient.send(
       new UpdateCommand({
         TableName: TABLES.BOOKINGS,
@@ -100,11 +106,6 @@ export async function cancelBooking(
           ":now": new Date().toISOString(),
         },
       })
-    );
-
-    // Fetch booking to get seatId
-    const { Item } = await docClient.send(
-      new GetCommand({ TableName: TABLES.BOOKINGS, Key: { userId, bookingId } })
     );
 
     if (Item?.seatId) {
